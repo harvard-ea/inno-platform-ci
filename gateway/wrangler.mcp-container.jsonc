@@ -1,0 +1,55 @@
+{
+  // container × oauth-rs (the mcp-container preset): the container-fronting
+  // gateway of wrangler.jsonc with the OAuth-RS identity vars of
+  // wrangler.mcp.jsonc — templated by --mcp-container-gateway. The gateway
+  // CODE is unchanged: OAUTH_RS_MODE picks the identity path, the absent
+  // APP_WORKER binding picks the container dispatch.
+  "workers_dev": false,                 // perimeter: the *.workers.dev URL bypasses the platform's DNS/routing
+  "name": "inno-app-replace",           // orchestrator/deploy sets to inno-app-{name}
+  "main": "src/gateway/index.ts",
+  // Pinned, not discovered: wrangler's nearest-tsconfig lookup walks up from
+  // the entry point, so whichever tsconfig.json happens to sit above the
+  // gateway's sources would otherwise decide how the platform's own
+  // authentication perimeter compiles (review F08). Path is relative to THIS
+  // config, which the platform writes next to the injected build inputs.
+  "tsconfig": "./tsconfig.json",
+  "compatibility_date": "2026-03-10",
+  "observability": { "enabled": true },
+  // RED signal (NoOp Phase 2): one data point per request, written by
+  // gateway/red.ts. ONE dataset platform-wide; constant-parity pins the name
+  // across all four gateway variants. The dataset name is a static
+  // constant, carrying no per-app template marker, so
+  // ci/template-wrangler.mjs's exact marker counts are unchanged.
+  "analytics_engine_datasets": [{ "binding": "RED", "dataset": "inno_app_red" }],
+  "containers": [
+    { "class_name": "AppContainer", "image": "./Dockerfile", "max_instances": 2, "instance_type": "basic" }
+  ],
+  "durable_objects": { "bindings": [{ "name": "APP", "class_name": "AppContainer" }] },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["AppContainer"] }],
+  "d1_databases": [{ "binding": "DB", "database_name": "inno-replace-db", "database_id": "REPLACE" }],
+  "r2_buckets": [{ "binding": "FILES", "bucket_name": "inno-replace-data" }],
+  "services": [
+    // The platform Worker: token introspection here as well as the touch
+    // channel, the Connections proxy and link checks; routing, not
+    // authentication. See wrangler.jsonc.
+    { "binding": "PLATFORM", "service": "inno-platform" }
+  ],
+  // OAUTH_RS_MODE switches the gateway onto the bearer-token path. OAUTH_RS_RESOURCE is
+  // this app's RFC 8707/9728 resource identifier, templated from the broker's
+  // `oauth_rs_resource`; it is compared by EXACT match against a token's
+  // audience, which is what stops a token minted for one app being replayed
+  // against another. MCP_AUTH_SERVER is a static deployment constant (the
+  // platform's own origin) advertised in the protected-resource metadata; it
+  // keeps its MCP_ prefix because it names the MCP-protocol Authorization
+  // Server per RFC 9728 — protocol vocabulary, not the retired type
+  // vocabulary, so it is exempt from the Phase B rename (spec Decision 4
+  // keep-list).
+  // Deliberately NO ACCESS_AUD / ACCESS_TEAM_DOMAIN: these apps have no Access
+  // application, and the gateway's Access branch fails closed without them.
+  "vars": {
+    "OAUTH_RS_MODE": "true",
+    "OAUTH_RS_RESOURCE": "REPLACE",
+    "MCP_AUTH_SERVER": "https://inno-platform.spark.huit.harvard.edu",
+    "ENVIRONMENT": "production"
+  }
+}

@@ -1,0 +1,42 @@
+{
+  // Injected gateway config for FUNCTION-SHAPED apps (migration 0022). Same gateway
+  // code as the three other variants (src/gateway/index.ts); it dispatches on the
+  // APP_WORKER binding (gateway/index.ts forwardToWorker). The difference from
+  // wrangler.jsonc: no container/Durable Object, and a service binding to the
+  // app's own Worker instead. Templated per app by ci/template-wrangler.mjs
+  // (templateWorkerGateway).
+  "workers_dev": false,                 // perimeter: the *.workers.dev URL is not behind Access
+  "name": "inno-app-replace",           // orchestrator/deploy sets to inno-app-{name}
+  "main": "src/gateway/index.ts",
+  // Pinned, not discovered: wrangler's nearest-tsconfig lookup walks up from
+  // the entry point, so whichever tsconfig.json happens to sit above the
+  // gateway's sources would otherwise decide how the platform's own
+  // authentication perimeter compiles (review F08). Path is relative to THIS
+  // config, which the platform writes next to the injected build inputs.
+  "tsconfig": "./tsconfig.json",
+  "compatibility_date": "2026-03-10",
+  "observability": { "enabled": true },
+  // RED signal (NoOp Phase 2): one data point per request, written by
+  // gateway/red.ts. ONE dataset platform-wide; constant-parity pins the name
+  // across all four gateway variants. The dataset name is a static
+  // constant, carrying no per-app template marker, so
+  // ci/template-wrangler.mjs's exact marker counts are unchanged.
+  "analytics_engine_datasets": [{ "binding": "RED", "dataset": "inno_app_red" }],
+  // The app's own Worker. It has workers_dev:false and NO route, so it is
+  // reachable ONLY through this binding — the gateway (which verifies Access and
+  // injects identity FIRST) stays the sole entrypoint and identity boundary.
+  "services": [
+    { "binding": "APP_WORKER", "service": "inno-app-replace-app" },
+    // The platform Worker (the human-activity touch channel); see wrangler.jsonc.
+    { "binding": "PLATFORM", "service": "inno-platform" }
+  ],
+  // ACCESS_TEAM_DOMAIN is a STATIC deployment constant (see wrangler.jsonc);
+  // ACCESS_AUD is templated per app. No D1/R2 here — storage belongs to the app
+  // Worker, which holds its own scoped bindings.
+  "vars": { "ACCESS_TEAM_DOMAIN": "huitpoc.cloudflareaccess.com", "ACCESS_AUD": "REPLACE", "ENVIRONMENT": "production" }
+  // No `dev` block, exactly as in wrangler.jsonc: wrangler discards a `vars`
+  // key inside `dev`, so the one this file used to carry reached no runtime
+  // and the X-Mock-User branch (R37) is unreachable everywhere. Use a
+  // gitignored `.dev.vars` file for a local-only var (OPERATIONS §4.5). See
+  // wrangler.jsonc for the full note.
+}

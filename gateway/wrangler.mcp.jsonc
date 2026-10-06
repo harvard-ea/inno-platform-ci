@@ -1,0 +1,54 @@
+{
+  // Injected gateway config for MCP-TYPE apps. Same gateway code as the other
+  // three variants (src/gateway/index.ts); the difference is the IDENTITY
+  // BOUNDARY. An MCP client cannot complete an interactive Cloudflare Access
+  // login, so these apps have NO Access application: the gateway runs in MCP
+  // mode as an OAuth 2.1 Resource Server, verifying a platform-issued bearer
+  // token and injecting the same spoof-proof X-Forwarded-* headers the Access
+  // path injects. Templated per app by ci/template-wrangler.mjs
+  // (templateMcpGateway). See APP-CONTRACT §1.2.
+  "workers_dev": false,                 // perimeter: the *.workers.dev URL bypasses the platform's DNS/routing
+  "name": "inno-app-replace",           // orchestrator/deploy sets to inno-app-{name}
+  "main": "src/gateway/index.ts",
+  // Pinned, not discovered: wrangler's nearest-tsconfig lookup walks up from
+  // the entry point, so whichever tsconfig.json happens to sit above the
+  // gateway's sources would otherwise decide how the platform's own
+  // authentication perimeter compiles (review F08). Path is relative to THIS
+  // config, which the platform writes next to the injected build inputs.
+  "tsconfig": "./tsconfig.json",
+  "compatibility_date": "2026-03-10",
+  "observability": { "enabled": true },
+  // RED signal (NoOp Phase 2): one data point per request, written by
+  // gateway/red.ts. ONE dataset platform-wide; constant-parity pins the name
+  // across all four gateway variants. The dataset name is a static
+  // constant, carrying no per-app template marker, so
+  // ci/template-wrangler.mjs's exact marker counts are unchanged.
+  "analytics_engine_datasets": [{ "binding": "RED", "dataset": "inno_app_red" }],
+  "services": [
+    // The app's own Worker — workers_dev:false and no route, so it is reachable
+    // ONLY through this binding. The gateway (which authenticates FIRST) stays
+    // the sole entrypoint and identity boundary, exactly as for function-type apps.
+    { "binding": "APP_WORKER", "service": "inno-app-replace-app" },
+    // The platform Worker: token introspection here as well as the touch
+    // channel; routing, not authentication. See wrangler.jsonc.
+    { "binding": "PLATFORM", "service": "inno-platform" }
+  ],
+  // OAUTH_RS_MODE switches the gateway onto the bearer-token path. OAUTH_RS_RESOURCE is
+  // this app's RFC 8707/9728 resource identifier, templated from the broker's
+  // `oauth_rs_resource`; it is compared by EXACT match against a token's
+  // audience, which is what stops a token minted for one app being replayed
+  // against another. MCP_AUTH_SERVER is a static deployment constant (the
+  // platform's own origin) advertised in the protected-resource metadata; it
+  // keeps its MCP_ prefix because it names the MCP-protocol Authorization
+  // Server per RFC 9728 — protocol vocabulary, not the retired type
+  // vocabulary, so it is exempt from the Phase B rename (spec Decision 4
+  // keep-list).
+  // Deliberately NO ACCESS_AUD / ACCESS_TEAM_DOMAIN: these apps have no Access
+  // application, and the gateway's Access branch fails closed without them.
+  "vars": {
+    "OAUTH_RS_MODE": "true",
+    "OAUTH_RS_RESOURCE": "REPLACE",
+    "MCP_AUTH_SERVER": "https://inno-platform.spark.huit.harvard.edu",
+    "ENVIRONMENT": "production"
+  }
+}

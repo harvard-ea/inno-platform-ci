@@ -1,0 +1,15 @@
+{
+  "name": "inno-app",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@cloudflare/containers": "^0.2.4",
+    "hono": "^4.13.7",
+    "jose": "^5"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^5",
+    "typescript": "^5",
+    "wrangler": "4.132.0"
+  }
+}

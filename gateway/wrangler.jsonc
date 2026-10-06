@@ -1,0 +1,53 @@
+{
+  "workers_dev": false,                 // perimeter: the *.workers.dev URL is not behind Access
+  "name": "inno-app-replace",           // orchestrator/deploy sets to inno-app-{name}
+  "main": "src/gateway/index.ts",
+  // Pinned, not discovered: wrangler's nearest-tsconfig lookup walks up from
+  // the entry point, so whichever tsconfig.json happens to sit above the
+  // gateway's sources would otherwise decide how the platform's own
+  // authentication perimeter compiles (review F08). Path is relative to THIS
+  // config, which the platform writes next to the injected build inputs.
+  "tsconfig": "./tsconfig.json",
+  "compatibility_date": "2026-03-10",
+  "observability": { "enabled": true },
+  // RED signal (NoOp Phase 2): one data point per request, written by
+  // gateway/red.ts. ONE dataset platform-wide; constant-parity pins the name
+  // across all four gateway variants. The dataset name is a static
+  // constant, carrying no per-app template marker, so
+  // ci/template-wrangler.mjs's exact marker counts are unchanged.
+  "analytics_engine_datasets": [{ "binding": "RED", "dataset": "inno_app_red" }],
+  "containers": [
+    { "class_name": "AppContainer", "image": "./Dockerfile", "max_instances": 2, "instance_type": "basic" }
+  ],
+  "durable_objects": { "bindings": [{ "name": "APP", "class_name": "AppContainer" }] },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["AppContainer"] }],
+  "d1_databases": [{ "binding": "DB", "database_name": "inno-replace-db", "database_id": "REPLACE" }],
+  "r2_buckets": [{ "binding": "FILES", "bucket_name": "inno-replace-data" }],
+  // Service binding to the platform Worker, bound on all four gateway
+  // variants (the other three say "see wrangler.jsonc"). On every variant it
+  // carries the human-activity touch (spec 2026-08-18); on the container
+  // variants the Connections proxy and link checks (gateway/storage.ts); on
+  // the two oauth-rs variants token introspection (POST /app-introspect),
+  // because the platform's access tokens are opaque and cannot be verified
+  // locally. Routing, NOT authentication: every one of those platform routes
+  // is publicly reachable and authenticates by payload (the forwarded Access
+  // JWT, the presented token, the gateway key), and /app-introspect is safe
+  // by construction (no authority, returns only what the presented token
+  // already contains; see src/routes/mcp-introspect.ts). The target must be
+  // the root wrangler.jsonc's "name": constant-parity pins it.
+  "services": [{ "binding": "PLATFORM", "service": "inno-platform" }],
+  // ACCESS_TEAM_DOMAIN is a STATIC deployment constant, not templated per app:
+  // the gateway verifies every Access JWT's issuer against it. When adapting
+  // this platform to your own accounts, set it to your <team>.cloudflareaccess.com
+  // (OPERATIONS §4.6 step 6) — left stale, apps deploy but every request 401s.
+  "vars": { "ACCESS_TEAM_DOMAIN": "huitpoc.cloudflareaccess.com", "ACCESS_AUD": "REPLACE", "ENVIRONMENT": "production" }
+  // No `dev` block here, in any of the four gateway variants. `vars` is not a
+  // field wrangler accepts inside `dev`: it warns "Unexpected fields found in
+  // dev field" and discards the whole thing, so the block two of these files
+  // used to carry reached no runtime at all, local or deployed. That is why
+  // gateway/index.ts's X-Mock-User branch (R37, gated on DEV_MOCK_IDENTITY) is
+  // unreachable everywhere, which is the safe direction and deliberately not
+  // "fixed". To supply a var to a local `wrangler dev`, use a gitignored
+  // `.dev.vars` file (OPERATIONS §4.5); never add either name to the deployed
+  // "vars" above, which ci/template-wrangler.mjs refuses outright.
+}

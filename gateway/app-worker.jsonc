@@ -1,0 +1,24 @@
+{
+  // Injected config for the APP WORKER of a function-shaped app (migration 0022) —
+  // the user's own Cloudflare Worker, deployed alongside (and behind) the
+  // gateway. `main` is the app author's entry: a standard Worker module at
+  // app/index.ts exporting `export default { fetch(request, env, ctx) }`. The
+  // request it receives has already been Access-verified and carries spoof-proof
+  // X-Forwarded-User / X-Forwarded-Groups (the gateway injected them). Templated
+  // per app by ci/template-wrangler.mjs (templateWorkerApp).
+  "workers_dev": false,                 // internal-only: reachable solely via the gateway's APP_WORKER service binding
+  "name": "inno-app-replace-app",       // orchestrator/deploy sets to inno-app-{name}-app
+  "main": "app/index.ts",
+  "compatibility_date": "2026-03-10",
+  "compatibility_flags": ["nodejs_compat"],
+  "observability": { "enabled": true },
+  // The app's OWN storage bindings (its provisioned D1 + R2). Function-shaped apps
+  // use these directly (env.DATA / env.FILES) rather than the container's
+  // http://storage.internal — a deliberate posture difference: a binding is a
+  // capability handle to the app's own resources, not an exfiltratable token,
+  // and the app passed the same safety gates. No route is declared — the broker
+  // attaches the hostname to the GATEWAY, never to this Worker.
+  "d1_databases": [{ "binding": "DATA", "database_name": "inno-replace-db", "database_id": "REPLACE" }],
+  "r2_buckets": [{ "binding": "FILES", "bucket_name": "inno-replace-data" }],
+  "vars": { "ENVIRONMENT": "production" }
+}

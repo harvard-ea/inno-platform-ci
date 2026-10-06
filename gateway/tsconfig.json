@@ -1,0 +1,16 @@
+{
+  "compilerOptions": {
+    "target": "ES2022", "module": "ES2022", "moduleResolution": "bundler",
+    "strict": true, "noEmit": true, "skipLibCheck": true, "types": ["@cloudflare/workers-types"],
+    "lib": ["ES2022"]
+  },
+  // NOTE: paths are relative to the DEPLOYED app layout, not this repo. At
+  // build time platform-ci copies this tsconfig to the app root and the gateway
+  // sources land in `src/gateway/`, so `src` is correct there. Inside
+  // inno-platform the gateway lives at `gateway/*.ts` and is typechecked by the
+  // ROOT tsconfig.json (`include: [... "gateway"]`) — do not "fix" this to
+  // `gateway` or it will typecheck nothing in the deployed repo. No `test`
+  // entry and no test-runner types: the deployed layout has no test suite
+  // (the gateway suite runs from the inno-platform root, vitest.config.gateway.ts).
+  "include": ["src"]
+}
