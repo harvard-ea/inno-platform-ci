@@ -37,10 +37,16 @@
   // the root wrangler.jsonc's "name": constant-parity pins it.
   "services": [{ "binding": "PLATFORM", "service": "inno-platform" }],
   // ACCESS_TEAM_DOMAIN is a STATIC deployment constant, not templated per app:
-  // the gateway verifies every Access JWT's issuer against it. When adapting
-  // this platform to your own accounts, set it to your <team>.cloudflareaccess.com
-  // (OPERATIONS §4.6 step 6) — left stale, apps deploy but every request 401s.
-  "vars": { "ACCESS_TEAM_DOMAIN": "huitpoc.cloudflareaccess.com", "ACCESS_AUD": "REPLACE", "ENVIRONMENT": "production" }
+  // the gateway verifies every Access JWT's issuer against it. It is rendered
+  // from the manifest's cloudflare.teamDomain (OPERATIONS §2.1); a wrong one
+  // deploys cleanly and then 401s every request.
+  // HOST_PREFIX and GROUP_PREFIX are the manifest's naming.hostPrefix and
+  // naming.groupPrefix: the gateway strips the first from its hostname to
+  // find its app, and builds the app's group names from the second. They sit
+  // in the config, not in the gateway's code, so another instance's mirror
+  // needs no code change, and the config and the code that reads it always
+  // come from one gateway.ref.
+  "vars": { "ACCESS_TEAM_DOMAIN": "huitpoc.cloudflareaccess.com", "ACCESS_AUD": "REPLACE", "ENVIRONMENT": "production", "HOST_PREFIX": "inno-", "GROUP_PREFIX": "inno-" }
   // No `dev` block here, in any of the four gateway variants. `vars` is not a
   // field wrangler accepts inside `dev`: it warns "Unexpected fields found in
   // dev field" and discards the whole thing, so the block two of these files

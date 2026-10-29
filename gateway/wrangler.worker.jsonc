@@ -23,7 +23,7 @@
   // ci/template-wrangler.mjs's exact marker counts are unchanged.
   "analytics_engine_datasets": [{ "binding": "RED", "dataset": "inno_app_red" }],
   // The app's own Worker. It has workers_dev:false and NO route, so it is
-  // reachable ONLY through this binding — the gateway (which verifies Access and
+  // reachable ONLY through this binding: the gateway (which verifies Access and
   // injects identity FIRST) stays the sole entrypoint and identity boundary.
   "services": [
     { "binding": "APP_WORKER", "service": "inno-app-replace-app" },
@@ -31,9 +31,10 @@
     { "binding": "PLATFORM", "service": "inno-platform" }
   ],
   // ACCESS_TEAM_DOMAIN is a STATIC deployment constant (see wrangler.jsonc);
-  // ACCESS_AUD is templated per app. No D1/R2 here — storage belongs to the app
-  // Worker, which holds its own scoped bindings.
-  "vars": { "ACCESS_TEAM_DOMAIN": "huitpoc.cloudflareaccess.com", "ACCESS_AUD": "REPLACE", "ENVIRONMENT": "production" }
+  // ACCESS_AUD is templated per app. No D1/R2 here: storage belongs to the app
+  // Worker, which holds its own scoped bindings. HOST_PREFIX and GROUP_PREFIX:
+  // see wrangler.jsonc.
+  "vars": { "ACCESS_TEAM_DOMAIN": "huitpoc.cloudflareaccess.com", "ACCESS_AUD": "REPLACE", "ENVIRONMENT": "production", "HOST_PREFIX": "inno-", "GROUP_PREFIX": "inno-" }
   // No `dev` block, exactly as in wrangler.jsonc: wrangler discards a `vars`
   // key inside `dev`, so the one this file used to carry reached no runtime
   // and the X-Mock-User branch (R37) is unreachable everywhere. Use a

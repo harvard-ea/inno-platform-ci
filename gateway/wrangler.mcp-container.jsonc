@@ -1,7 +1,7 @@
 {
   // container × oauth-rs (the mcp-container preset): the container-fronting
   // gateway of wrangler.jsonc with the OAuth-RS identity vars of
-  // wrangler.mcp.jsonc — templated by --mcp-container-gateway. The gateway
+  // wrangler.mcp.jsonc, templated by --mcp-container-gateway. The gateway
   // CODE is unchanged: OAUTH_RS_MODE picks the identity path, the absent
   // APP_WORKER binding picks the container dispatch.
   "workers_dev": false,                 // perimeter: the *.workers.dev URL bypasses the platform's DNS/routing
@@ -41,15 +41,19 @@
   // against another. MCP_AUTH_SERVER is a static deployment constant (the
   // platform's own origin) advertised in the protected-resource metadata; it
   // keeps its MCP_ prefix because it names the MCP-protocol Authorization
-  // Server per RFC 9728 — protocol vocabulary, not the retired type
+  // Server per RFC 9728: protocol vocabulary, not the retired type
   // vocabulary, so it is exempt from the Phase B rename (spec Decision 4
   // keep-list).
   // Deliberately NO ACCESS_AUD / ACCESS_TEAM_DOMAIN: these apps have no Access
   // application, and the gateway's Access branch fails closed without them.
+  // MCP_AUTH_SERVER is rendered from the manifest (the platform's origin);
+  // HOST_PREFIX and GROUP_PREFIX: see wrangler.jsonc.
   "vars": {
     "OAUTH_RS_MODE": "true",
     "OAUTH_RS_RESOURCE": "REPLACE",
     "MCP_AUTH_SERVER": "https://inno-platform.spark.huit.harvard.edu",
+    "HOST_PREFIX": "inno-",
+    "GROUP_PREFIX": "inno-",
     "ENVIRONMENT": "production"
   }
 }

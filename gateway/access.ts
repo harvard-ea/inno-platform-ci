@@ -1,15 +1,9 @@
 import { jwtVerify } from "jose";
+import { instanceGroups } from "./instance";
 import { errLine } from "./log-text";
 
 export const ACCESS_JWT_HEADER = "cf-access-jwt-assertion";
 export const ACCESS_COOKIE = "CF_Authorization";
-// The platform group prefix. Only `inno-` groups are carried into the
-// container (prod filter here + the dev X-Mock-Groups filter in index.ts) —
-// one constant so the two paths can't drift.
-// Cross-build twin of src/naming.ts's OKTA_GROUP_PREFIX (gateway/ builds
-// separately and imports nothing from src/); naming.ts names this file back,
-// and test/constant-parity.node.test.ts holds the two literals together.
-export const GROUP_PREFIX = "inno-";
 
 export interface AccessIdentity {
   email: string;
@@ -30,9 +24,13 @@ export interface AccessIdentity {
 // token matrix to both verifiers and demands the same accept/reject answer. A
 // claims change landing on one side only makes every gateway touch fail
 // verification silently, which freezes last_seen_at on an app in real use.
+//
+// Only this instance's groups (opts.groupPrefix, the gateway's GROUP_PREFIX
+// var) are kept: the filter instance.ts states once for all three identity
+// paths.
 export async function verifyAccessJwt(
   token: string,
-  opts: { jwks: Parameters<typeof jwtVerify>[1]; aud: string; teamDomain: string },
+  opts: { jwks: Parameters<typeof jwtVerify>[1]; aud: string; teamDomain: string; groupPrefix: string },
   { allowService = false } = {},
 ): Promise<AccessIdentity> {
   try {
@@ -51,9 +49,7 @@ export async function verifyAccessJwt(
       }
       throw new Error("no email claim");
     }
-    const rawGroups = Array.isArray(payload.groups) ? payload.groups : [];
-    const groups = rawGroups.filter((g): g is string => typeof g === "string" && g.startsWith(GROUP_PREFIX));
-    return { email, groups };
+    return { email, groups: instanceGroups(opts.groupPrefix, payload.groups) };
   } catch (e) {
     throw new Error(`access_invalid:${errLine(e, 120)}`);
   }

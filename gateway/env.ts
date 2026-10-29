@@ -15,6 +15,12 @@ export type Env = {
   // against `undefined`.
   ACCESS_AUD?: string; ACCESS_TEAM_DOMAIN?: string;
   ENVIRONMENT: string;
+  // The instance's host and group prefixes (naming.hostPrefix,
+  // naming.groupPrefix), rendered into all four gateway configs. Read only
+  // through instance.ts's readPrefixes. OPTIONAL in the type because a config
+  // without them is a deploy-time error the gateway must catch and refuse
+  // (index.ts answers 500), never one the compiler may assume away.
+  HOST_PREFIX?: string; GROUP_PREFIX?: string;
   // The dev mock-identity switch (R37): index.ts's X-Mock-User branch requires
   // it to equal "enabled". NOTHING SUPPLIES IT TODAY, in any runtime. The
   // gateway configs name it inside their `dev` block, but `vars` is not a field
@@ -39,7 +45,7 @@ export type Env = {
   // Server instead of an Access-terminating proxy. OAUTH_RS_MODE is the switch;
   // ACCESS_AUD is absent on these apps because they have no Access application.
   OAUTH_RS_MODE?: string;
-  // This app's RFC 8707/9728 resource identifier — `https://inno-{app}.{domain}/mcp`,
+  // This app's RFC 8707/9728 resource identifier, `https://<hostPrefix><app>.<domain>/mcp`,
   // templated by CI from the deploy broker's `oauth_rs_resource`. Compared by EXACT
   // match against a token's audience, so it must not be rebuilt ad hoc.
   OAUTH_RS_RESOURCE?: string;
@@ -56,13 +62,12 @@ export type Env = {
   // config (the app's CI can read its own config, and must not read this).
   // The platform requires this header once its own key is provisioned, unless
   // its admin switch (connections.gateway_key_required) is explicitly false.
+  // A platform with no key of its own issues no caller assertion at all, to a
+  // gateway with a key or without one, whatever the switch says (OPEN 51).
   // A gateway deployed before the key existed has none to send and must be
-  // redeployed to receive it.
-  // Connections is not all a keyless gateway loses: the oauth-rs idle-clock
-  // touch (index.ts) fires only when the identity carries a caller assertion,
-  // which is exactly what the platform withholds here, so an MCP app in real
-  // use stops advancing its clock and the lifecycle engine warns and then
-  // stops it. One redeploy restores both.
+  // redeployed to receive it. The oauth-rs idle-clock touch does not need it:
+  // index.ts sends the caller's own token, which the platform re-introspects
+  // (OPEN #35).
   GATEWAY_INTROSPECT_KEY?: string;
   // RED signal (NoOp Phase 2, gateway/red.ts). Bound on all four gateway
   // variants, and OPTIONAL for a reason that is load-bearing rather than

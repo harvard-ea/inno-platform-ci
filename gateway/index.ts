@@ -3,8 +3,9 @@ import { getCookie } from "hono/cookie";
 import { Container, getContainer } from "@cloudflare/containers";
 import { createRemoteJWKSet } from "jose";
 import type { Env } from "./env";
-import { verifyAccessJwt, ACCESS_JWT_HEADER, ACCESS_COOKIE, GROUP_PREFIX, type AccessIdentity } from "./access";
+import { verifyAccessJwt, ACCESS_JWT_HEADER, ACCESS_COOKIE, type AccessIdentity } from "./access";
 import { sanitizeAndInject } from "./identity";
+import { instanceGroups, readPrefixes } from "./instance";
 import { errLine } from "./log-text";
 import { handleStorage, type StorageEnv } from "./storage";
 import {
@@ -158,7 +159,11 @@ export function makeApp(deps: Deps = realDeps) {
   // the forward marks the class in `redStatus` and this reads the override.
   app.use("*", async (c, next) => {
     const started = Date.now();
-    const app_ = appFromHostname(new URL(c.req.url).hostname);
+    // A gateway whose prefix vars are broken still records its refusal (the
+    // handler answers 500), under the bare first label: with no host prefix
+    // there is no app name to strip to, and telemetry never fails a request.
+    const pre = readPrefixes(c.env);
+    const app_ = appFromHostname(new URL(c.req.url).hostname, pre.ok ? pre.prefixes.hostPrefix : "");
     const path = pathClass(c.req.path);
     const record = (status: Parameters<typeof writeRed>[1]["status"]) => writeRed(c.env, {
       app: app_, path, status,
@@ -176,6 +181,18 @@ export function makeApp(deps: Deps = realDeps) {
   app.all("*", async (c) => {
     const env = c.env;
     const path = c.req.path;
+    // The instance's two prefixes, from this gateway's own config vars. A
+    // config without them, or with a malformed one, is a deploy-time error:
+    // refuse every request, the public discovery document included, rather
+    // than guess a prefix and forward the wrong groups while looking healthy.
+    // 500, not 401: nothing the caller sends can fix it, and no-store so no
+    // client or cache keeps the answer past the fix.
+    const pre = readPrefixes(env);
+    if (!pre.ok) {
+      console.error(`gateway: ${pre.error}; refusing all requests`);
+      return c.text("misconfigured", 500, { "cache-control": "no-store" });
+    }
+    const { prefixes } = pre;
     // The Host header is not guaranteed present on every Request object
     // (notably absent on synthetic requests built with `new Request()`, as
     // opposed to ones that arrived over real HTTP); the URL's own hostname
@@ -201,11 +218,13 @@ export function makeApp(deps: Deps = realDeps) {
       if (c.req.method === "GET" && isProtectedResourceRequest(env, path)) {
         return protectedResourceMetadata(env);
       }
-      const auth = await authenticateMcp(env, c.req.raw, env.OAUTH_RS_RESOURCE ?? "");
+      const resource = env.OAUTH_RS_RESOURCE ?? "";
+      const bearer = bearerToken(c.req.raw);
+      const auth = await authenticateMcp(env, c.req.raw, resource, prefixes.groupPrefix);
       if (!auth) {
         // Distinguish "presented a bad/expired token" (→ error=invalid_token, so
         // the client refreshes) from "presented none" (→ start authorization).
-        const hadToken = bearerToken(c.req.raw) !== null;
+        const hadToken = bearer !== null;
         console.warn(`gateway: 401 ${hadToken ? "invalid" : "no"} bearer (${c.req.method} ${path})`);
         return unauthorizedChallenge(env, hadToken);
       }
@@ -229,10 +248,15 @@ export function makeApp(deps: Deps = realDeps) {
       // user advances the idle clock. Debounce-gated BEFORE the body peek so
       // the clone/parse cost is paid at most once per window; protocol
       // chatter, probes, and tokenless noise never qualify.
-      if (env.PLATFORM && identity.callerAssertion && c.req.method === "POST" && path === "/mcp") {
+      // Keyed on the email, the way the sso branch below is, and carrying the
+      // caller's own token for the platform to re-introspect (OPEN #35). It
+      // used to carry the caller assertion, which the platform withholds from
+      // a gateway without the key, so a keyless gateway froze its app's clock.
+      // The service credential has no email, so it never touches.
+      if (env.PLATFORM && identity.email && bearer && c.req.method === "POST" && path === "/mcp") {
         if (shouldTouch(host, Date.now()) && (await mcpWorkRequest(c.req.raw))) {
           markTouched(host, Date.now());
-          queueTouch(c, env.PLATFORM, { assertion: identity.callerAssertion });
+          queueTouch(c, env.PLATFORM, { resource, token: bearer });
         }
       }
     } else if (env.ENVIRONMENT === "dev" && env.DEV_MOCK_IDENTITY === "enabled") {
@@ -241,9 +265,9 @@ export function makeApp(deps: Deps = realDeps) {
         // address: whatever this branch synthesizes is echoed to the app and
         // can end up in its logs as though a real person had signed in.
         email: c.req.header("X-Mock-User") ?? "dev@example.invalid",
-        // Same inno- filter production applies (access.ts), so dev can't inject
-        // a non-inno group the real path would strip.
-        groups: (c.req.header("X-Mock-Groups") ?? "").split(",").map((s) => s.trim()).filter((g) => g.startsWith(GROUP_PREFIX)),
+        // The group filter production applies (access.ts), so dev can't
+        // inject a group of another instance the real path would strip.
+        groups: instanceGroups(prefixes.groupPrefix, (c.req.header("X-Mock-Groups") ?? "").split(",").map((s) => s.trim())),
       };
     } else {
       // Fail CLOSED on a mis-templated deploy: without an AUD and team domain
@@ -263,7 +287,7 @@ export function makeApp(deps: Deps = realDeps) {
       // one request shape isHealthProbe (above) names.
       try {
         identity = await verifyAccessJwt(token,
-          { jwks: deps.jwks(env), aud: env.ACCESS_AUD, teamDomain: env.ACCESS_TEAM_DOMAIN },
+          { jwks: deps.jwks(env), aud: env.ACCESS_AUD, teamDomain: env.ACCESS_TEAM_DOMAIN, groupPrefix: prefixes.groupPrefix },
           { allowService: isHealthProbe });
       } catch (e) {
         console.warn(`gateway: 401 ${errLine(e, 120)} (${c.req.method} ${path})`);
@@ -289,9 +313,9 @@ export function makeApp(deps: Deps = realDeps) {
     // RED's caller bucket, now that there IS a verified identity. Set before
     // the forward so the surrounding middleware reads it whichever way the
     // request ends (proxied response, or a throw from the app).
-    c.set("redUser", await userBucket(appFromHostname(host), identity.email || "service"));
+    c.set("redUser", await userBucket(appFromHostname(host, prefixes.hostPrefix), identity.email || "service"));
 
-    const proxied = sanitizeAndInject(c.req.raw, identity, { mcpMode: env.OAUTH_RS_MODE === "true" });
+    const proxied = sanitizeAndInject(c.req.raw, identity, { prefixes, mcpMode: env.OAUTH_RS_MODE === "true" });
     // Deployment-type dispatch: function-shaped apps carry an APP_WORKER service
     // binding and forward to the app's own Worker; container-type apps (no such
     // binding) forward to the container. Either way the gateway did the Access

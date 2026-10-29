@@ -1,4 +1,5 @@
-import { ACCESS_COOKIE, GROUP_PREFIX, type AccessIdentity } from "./access";
+import { ACCESS_COOKIE, type AccessIdentity } from "./access";
+import type { Prefixes } from "./instance";
 import { appFromHostname } from "./red";
 
 // Identity-bearing headers a client must never supply to the container.
@@ -63,21 +64,22 @@ function setProxyAuthority(headers: Headers, req: Request): void {
 }
 
 // Twin of src/naming.ts's groupsVisibleToApp (gateway/ builds separately and
-// cannot import src/), parity-pinned by test/constant-parity.node.test.ts.
+// cannot import src/), held to it by test/instance-formula-parity.node.test.ts.
 //
 // The ONLY groups an app may be told about (R29). An app's authorization is
-// its own members group or its open twin; everything else in a person's
-// `inno-` list is information about the rest of the platform, including
-// whether they are a platform admin. The Okta claim cannot be narrowed per
-// app on this org tier (OPERATIONS section 9(a)), so the Access JWT arrives with
-// all of them and this is where the narrowing has to happen. Exact names, not
-// a prefix match, and fixed order: members, then open.
-export function groupsVisibleToApp(app: string, groups: readonly string[]): string[] {
-  return [`${GROUP_PREFIX}${app}-users`, `${GROUP_PREFIX}${app}-open`].filter((g) => groups.includes(g));
+// its own members group or its open twin; everything else in a person's list
+// of this instance's groups is information about the rest of the platform,
+// including whether they are a platform admin. The Okta claim cannot be
+// narrowed per app on this org tier (OPERATIONS section 9(a)), so the Access
+// JWT arrives with all of them and this is where the narrowing has to happen.
+// Exact names, not a prefix match, and fixed order: members, then open.
+// `groupPrefix` is the gateway's GROUP_PREFIX var (instance.ts readPrefixes).
+export function groupsVisibleToApp(groupPrefix: string, app: string, groups: readonly string[]): string[] {
+  return [`${groupPrefix}${app}-users`, `${groupPrefix}${app}-open`].filter((g) => groups.includes(g));
 }
 
 export function sanitizeAndInject(
-  req: Request, identity: AccessIdentity, opts: { mcpMode?: boolean } = {},
+  req: Request, identity: AccessIdentity, opts: { prefixes: Prefixes; mcpMode?: boolean },
 ): Request {
   const headers = new Headers(req.headers);
   for (const h of opts.mcpMode ? STRIP_EXACT_MCP : STRIP_EXACT) headers.delete(h);
@@ -110,8 +112,8 @@ export function sanitizeAndInject(
   // the request was actually routed to. Doing it INSIDE sanitizeAndInject
   // rather than at the call site means no branch (Access, MCP, dev) can skip
   // it, and the MCP path does not rely on the platform having narrowed.
-  const appName = appFromHostname(new URL(req.url).hostname);
-  headers.set("X-Forwarded-Groups", groupsVisibleToApp(appName, identity.groups).join(","));
+  const appName = appFromHostname(new URL(req.url).hostname, opts.prefixes.hostPrefix);
+  headers.set("X-Forwarded-Groups", groupsVisibleToApp(opts.prefixes.groupPrefix, appName, identity.groups).join(","));
   // Connections v1: only set when introspection actually minted one (MCP path,
   // CALLER_ASSERTION_KEY provisioned). The app echoes this value back to
   // /_connections/{name}; the gateway never trusts one from the client (see

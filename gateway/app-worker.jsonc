@@ -7,7 +7,7 @@
   // X-Forwarded-User / X-Forwarded-Groups (the gateway injected them). Templated
   // per app by ci/template-wrangler.mjs (templateWorkerApp).
   "workers_dev": false,                 // internal-only: reachable solely via the gateway's APP_WORKER service binding
-  "name": "inno-app-replace-app",       // orchestrator/deploy sets to inno-app-{name}-app
+  "name": "inno-app-replace-app",       // orchestrator/deploy sets to <resourcePrefix>app-<name>-app
   "main": "app/index.ts",
   "compatibility_date": "2026-03-10",
   "compatibility_flags": ["nodejs_compat"],

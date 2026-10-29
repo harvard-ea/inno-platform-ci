@@ -5,7 +5,7 @@ deploy workflow (`.github/workflows/platform-ci.yml`), the gate scripts it
 runs (`ci/`), and the gateway build inputs injected into every app deploy
 (`gateway/`).
 
-**This repo is a generated mirror — do not open PRs here.** Source of truth,
+**This repo is a generated mirror (do not open PRs here).** Source of truth,
 tests, and review happen in the private `inno-platform` repo; every commit
 here is `publish: inno-platform@<sha>`, pushed automatically by its CI.
 
@@ -46,11 +46,11 @@ Four things about that file are load-bearing:
 Pushing to `main` runs the safety gates only; pushing a `v*` tag deploys.
 
 The workflow is intentionally safe to call from untrusted repos: **provenance
-is enforced server-side** — the deploy broker verifies the signed OIDC
+is enforced server-side**: the deploy broker verifies the signed OIDC
 `job_workflow_ref`, `repository_id`, and `ref` claims and mints a deploy token
-to nothing else — and the gates themselves run inside this reusable workflow,
+to nothing else, and the gates themselves run inside this reusable workflow,
 which a calling repo cannot edit.
 
-Licensed MIT-0 (see LICENSE) — same as the app template; the contract is meant
+Licensed MIT-0 (see LICENSE), same as the app template; the contract is meant
 to be consumed and, for your own platform deployment, adapted without
 attribution burden.

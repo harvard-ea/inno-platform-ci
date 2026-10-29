@@ -18,7 +18,6 @@
 // `unknown` (never zero) on every consuming surface until its next deploy —
 // the same adoption story as observability.enabled (2026-07-23) and Workers
 // Logs (§7.10).
-import { GROUP_PREFIX } from "./access";
 import { errLine, hex } from "./log-text";
 
 export type RedEnv = { RED?: AnalyticsEngineDataset };
@@ -59,13 +58,14 @@ export function isError(cls: StatusClass): boolean {
 }
 
 // The app name, derived from the request hostname rather than a templated var:
-// apps are served at `inno-{app}.{domain}` (src/naming.ts appHostname), so the
-// inverse is a prefix strip on the first label. Deriving beats injecting — an
-// APP_NAME var would need a new REPLACE marker in all four gateway variants,
-// and template-wrangler.mjs asserts exact marker counts, so the marker and the
-// mirror's templater would have to land in lockstep or every app's deploy
-// breaks. Restated here rather than imported from src/naming.ts for the same
-// reason APPVAR_PREFIX and APP_NAME_RE are: the gateway builds separately.
+// apps are served at `<hostPrefix><app>.<domain>` (src/naming.ts appHostname),
+// so the inverse is a prefix strip on the first label. Deriving beats
+// injecting: an APP_NAME var would need a new REPLACE marker in all four
+// gateway variants, and template-wrangler.mjs asserts exact marker counts, so
+// the marker and the mirror's templater would have to land in lockstep or
+// every app's deploy breaks. Restated here rather than imported from
+// src/naming.ts for the same reason APPVAR_PREFIX and APP_NAME_RE are: the
+// gateway builds separately.
 //
 // NOT only a metrics helper: identity.ts's sanitizeAndInject also uses it to
 // pick which groups an app may see (R29). Reshaping this for RED cardinality
@@ -73,20 +73,21 @@ export function isError(cls: StatusClass): boolean {
 // strip a correctly routed app's groups from X-Forwarded-Groups. Any change
 // must still return the exact app name the request was routed to.
 //
-// The prefix is access.ts's GROUP_PREFIX rather than a second `inno-` literal
-// in this build: src/naming.ts collapses the same two uses onto one constant
-// (`OKTA_GROUP_PREFIX = INNO_PREFIX`), and the literal is pinned to the
-// platform's by test/constant-parity.node.test.ts, so importing it puts this
-// derivation behind that pin too.
+// `hostPrefix` is the gateway's HOST_PREFIX var (instance.ts readPrefixes),
+// the instance's naming.hostPrefix: its own knob, not the group prefix, since
+// an instance's hostnames and its groups can be named apart. An empty one
+// strips nothing, which is how RED names the request on a gateway whose var
+// is broken (index.ts).
 //
 // The twin is NOT total: src/naming.ts's appNameFromHostname returns null for
-// a hostname that is not `inno-<name>.<domain>`, while this one always returns
-// a name (the bare first label) because every caller here is already handling
-// a request the platform routed. The parity pin therefore covers platform
-// hosts only, and the non-platform answers differ on purpose.
-export function appFromHostname(hostname: string): string {
+// a hostname that is not `<hostPrefix><name>.<domain>`, while this one always
+// returns a name (the bare first label) because every caller here is already
+// handling a request the platform routed. The parity test therefore holds
+// the two equal on platform hosts only, and states the non-platform answers
+// that differ on purpose (test/instance-formula-parity.node.test.ts).
+export function appFromHostname(hostname: string, hostPrefix: string): string {
   const label = hostname.split(".")[0] ?? "";
-  return label.startsWith(GROUP_PREFIX) ? label.slice(GROUP_PREFIX.length) : label;
+  return label.startsWith(hostPrefix) ? label.slice(hostPrefix.length) : label;
 }
 
 // A low-cardinality, deliberately lossy caller bucket. It exists for ONE

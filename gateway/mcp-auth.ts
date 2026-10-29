@@ -28,7 +28,7 @@
 
 import type { Env } from "./env";
 import type { AccessIdentity } from "./access";
-import { GROUP_PREFIX } from "./access";
+import { instanceGroups } from "./instance";
 import { errLine, hex } from "./log-text";
 import { GATEWAY_KEY_HEADER, PLATFORM_ORIGIN } from "./platform";
 
@@ -80,7 +80,7 @@ function cacheSet(key: string, body: IntrospectionResponse, ttlSeconds: number, 
 
 // RFC 9728 §3.1: the metadata document lives under this prefix on the RESOURCE's
 // own origin, with the resource's path component INSERTED after it. Our resource
-// is `https://inno-{app}.{domain}/mcp`, so the spec-correct URL is
+// is `https://<hostPrefix><app>.<domain>/mcp`, so the spec-correct URL is
 // `/.well-known/oauth-protected-resource/mcp`. Clients differ on this in
 // practice, so `isProtectedResourceRequest` accepts the bare prefix too and the
 // challenge advertises the spec-correct form.
@@ -161,14 +161,13 @@ async function introspectViaPlatform(
         // caller_assertion — a credential that opens /_connections/fetch —
         // only for a caller holding this, because /app-introspect is publicly
         // reachable and the service binding is routing, not authentication.
-        // Omitted entirely when unprovisioned; the platform then withholds
+        // Omitted entirely when unprovisioned; a keyed platform then withholds
         // the caller assertion unless its admin switch is explicitly false
         // (the cutover override), so a keyless gateway loses Connections
-        // until it is redeployed with the key. It loses the idle clock with
-        // it: index.ts's touch fires only when the identity carries an
-        // assertion, so an MCP app in real use stops advancing its clock and
-        // the lifecycle engine warns and then stops it. One redeploy restores
-        // both.
+        // until it is redeployed with the key. A platform with no key of its
+        // own issues no caller assertion to any gateway, keyed or not
+        // (OPEN 51). Its idle clock keeps running:
+        // index.ts's touch carries the token, not the assertion.
         ...(gatewayKey ? { [GATEWAY_KEY_HEADER]: gatewayKey } : {}),
       },
       body: JSON.stringify({ token, resource }),
@@ -185,9 +184,10 @@ async function introspectViaPlatform(
 }
 
 // Resolve a bearer token to an identity, using (and populating) the per-isolate
-// cache. Returns null for any invalid/expired/foreign token.
+// cache. Returns null for any invalid/expired/foreign token. `groupPrefix` is
+// the gateway's GROUP_PREFIX var, which index.ts has already checked.
 export async function authenticateMcp(
-  env: Env, req: Request, resource: string,
+  env: Env, req: Request, resource: string, groupPrefix: string,
 ): Promise<McpAuthResult | null> {
   const token = bearerToken(req);
   if (!token) return null;
@@ -234,14 +234,13 @@ export async function authenticateMcp(
     console.warn("gateway: rejecting active introspection with no email and no service flag");
     return null;
   }
-  // Re-filter groups to the inno- prefix, matching verifyAccessJwt (access.ts)
-  // and the dev path — one invariant, now three producers. The gateway is
-  // version-pinned per app (gateway_ref) while the platform ships from main, so
-  // "the platform already filters" is a cross-version assumption, not a local
-  // guarantee; enforce it here too.
-  const groups = (Array.isArray(body.groups) ? body.groups : [])
-    .filter((g): g is string => typeof g === "string" && g.startsWith(GROUP_PREFIX));
-  const identity: AccessIdentity = { email, groups };
+  // Re-filter groups to this instance's group prefix, matching
+  // verifyAccessJwt (access.ts) and the dev path: one invariant, three
+  // producers, one filter (instance.ts instanceGroups). The gateway is
+  // version-pinned per app (gateway_ref) while the platform ships from main,
+  // so "the platform already filters" is a cross-version assumption, not a
+  // local guarantee; enforce it here too.
+  const identity: AccessIdentity = { email, groups: instanceGroups(groupPrefix, body.groups) };
   if (body.caller_assertion) identity.callerAssertion = body.caller_assertion;
   return { identity, service: body.service === true };
 }

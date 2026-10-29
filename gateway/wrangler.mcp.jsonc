@@ -25,7 +25,7 @@
   // ci/template-wrangler.mjs's exact marker counts are unchanged.
   "analytics_engine_datasets": [{ "binding": "RED", "dataset": "inno_app_red" }],
   "services": [
-    // The app's own Worker — workers_dev:false and no route, so it is reachable
+    // The app's own Worker: workers_dev:false and no route, so it is reachable
     // ONLY through this binding. The gateway (which authenticates FIRST) stays
     // the sole entrypoint and identity boundary, exactly as for function-type apps.
     { "binding": "APP_WORKER", "service": "inno-app-replace-app" },
@@ -40,15 +40,19 @@
   // against another. MCP_AUTH_SERVER is a static deployment constant (the
   // platform's own origin) advertised in the protected-resource metadata; it
   // keeps its MCP_ prefix because it names the MCP-protocol Authorization
-  // Server per RFC 9728 — protocol vocabulary, not the retired type
+  // Server per RFC 9728: protocol vocabulary, not the retired type
   // vocabulary, so it is exempt from the Phase B rename (spec Decision 4
   // keep-list).
   // Deliberately NO ACCESS_AUD / ACCESS_TEAM_DOMAIN: these apps have no Access
   // application, and the gateway's Access branch fails closed without them.
+  // MCP_AUTH_SERVER is rendered from the manifest (the platform's origin);
+  // HOST_PREFIX and GROUP_PREFIX: see wrangler.jsonc.
   "vars": {
     "OAUTH_RS_MODE": "true",
     "OAUTH_RS_RESOURCE": "REPLACE",
     "MCP_AUTH_SERVER": "https://inno-platform.spark.huit.harvard.edu",
+    "HOST_PREFIX": "inno-",
+    "GROUP_PREFIX": "inno-",
     "ENVIRONMENT": "production"
   }
 }

@@ -1,19 +1,22 @@
 # Hash-pinned install set for the deps gate's pip-audit run (security
-# remediation R25). gitleaks, semgrep and trivy are all SHA/digest-pinned;
-# pip-audit was the one scanner installed from PyPI unpinned, so its behavior
-# could change between two runs of the same commit.
+# remediation R25). gitleaks is pinned by SHA, trivy by digest and semgrep by
+# ci/semgrep.lock's hashes; pip-audit was the one scanner installed from PyPI
+# unpinned, so its behavior could change between two runs of the same commit.
 #
-# Must be regenerated under Python 3.12, not 3.13. The tenant deps job
-# (platform-ci.yml, step "pip-audit (app/requirements.txt, if present)")
-# installs this lock with the GitHub runner's system python3, and
-# ubuntu-latest is Ubuntu 24.04 with Python 3.12. cyclonedx-python-lib (a
-# pip-audit dependency) needs typing_extensions only below Python 3.13; a
-# lock resolved under 3.13 omits it, so on the 3.12 runner
-# "pip install --require-hashes -r ci/pip-audit.lock" refuses: "In
+# Must be resolved under the runner's Python or an older one, never a newer
+# one. The tenant deps job (platform-ci.yml, step "pip-audit
+# (app/requirements.txt, if present)") installs this lock with the GitHub
+# runner's system python3, which is Python 3.14 on ubuntu-26.04, the one
+# runner image every job uses (v0.15.7). A newer Python's resolve can omit
+# what an older one needs: cyclonedx-python-lib (a pip-audit dependency)
+# needs typing_extensions only below Python 3.13, so a lock resolved under
+# 3.13 omitted it, and on the 3.12 runner of the time
+# "pip install --require-hashes -r ci/pip-audit.lock" refused: "In
 # --require-hashes mode, all requirements must have their versions pinned
-# with ==. These do not: typing_extensions..." (task 11, v0.14.5).
-# Regenerating under 3.12 pins typing_extensions too, and the result still
-# installs cleanly on 3.13 (the platform CI job proves both).
+# with ==. These do not: typing_extensions..." (task 11, v0.14.5). An older
+# Python's resolve only adds a pin the runner does not need. This lock was
+# resolved under 3.12, and the platform CI job proves it installs on the
+# runner's Python.
 #
 # Regenerate with:
 #   python3.12 -m venv /tmp/inno-pinner

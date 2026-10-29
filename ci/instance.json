@@ -1,0 +1,10 @@
+{
+  "hostPrefix": "inno-",
+  "resourcePrefix": "inno-",
+  "groupPrefix": "inno-",
+  "platformName": "inno-platform",
+  "platformHost": "inno-platform",
+  "adminGroup": "inno-spark-admins",
+  "diagBucket": "inno-platform-diagnostics",
+  "emailHostLabel": "mail"
+}
