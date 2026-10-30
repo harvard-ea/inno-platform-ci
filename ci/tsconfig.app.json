@@ -1,0 +1,18 @@
+{
+  "compilerOptions": {
+    "target": "ES2022", "module": "ES2022", "moduleResolution": "bundler",
+    "strict": true, "noEmit": true, "skipLibCheck": true,
+    "lib": ["ES2022"]
+  },
+  // The function shape's compiler settings. Tenant CI's app-build job copies
+  // this file to tsconfig.json at the app checkout's root before it bundles a
+  // function-shaped app, because app-worker.jsonc pins no tsconfig: the
+  // bundler's nearest-tsconfig lookup from app/index.ts finds an author's
+  // app/tsconfig.json first, when there is one, and otherwise falls through
+  // to that root copy. Paths are relative to that root, where the author's
+  // code lives under app/. No test entry and no types package: the build
+  // runs no test suite and no typecheck (esbuild strips types without
+  // reading them), and ci/build installs wrangler alone, so a `types` entry
+  // here would name a package the build never has.
+  "include": ["app"]
+}

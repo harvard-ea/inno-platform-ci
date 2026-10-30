@@ -1,0 +1,23 @@
+{
+  // The bundling config for a function-shaped app's own Worker (the function
+  // and mcp-function presets). Tenant CI's app-build job copies it to the
+  // checkout root and runs the pinned wrangler's `deploy --dry-run --outfile`
+  // with it, which bundles app/index.ts and writes the multipart upload form
+  // wrangler would have sent; the platform uploads the Worker from that form.
+  // `main` is the app author's entry: a standard Worker module at
+  // app/index.ts exporting `export default { fetch(request, env, ctx) }`.
+  //
+  // It holds nothing beyond what bundling reads. The platform throws away
+  // wrangler's own metadata and writes the upload's itself: the app's own D1
+  // and R2 (env.DATA and env.FILES), per data link the source's D1 and R2
+  // (a LINKED_ and a LINK_FILES_ binding), ENVIRONMENT, the app's variables,
+  // and Workers Logs. No name, binding, var or route here reaches the
+  // Worker. The compatibility date and flags
+  // decide which Node polyfills the bundle carries, so they must be the
+  // platform's own, and the platform refuses a bundle built with any other
+  // (test/function-metadata.node.test.ts holds the two equal).
+  "name": "app",
+  "main": "app/index.ts",
+  "compatibility_date": "2026-10-13",
+  "compatibility_flags": ["nodejs_compat"]
+}

@@ -1,7 +1,8 @@
 # Hash-pinned install set for the deps gate's pip-audit run (security
-# remediation R25). gitleaks is pinned by SHA, trivy by digest and semgrep by
-# ci/semgrep.lock's hashes; pip-audit was the one scanner installed from PyPI
-# unpinned, so its behavior could change between two runs of the same commit.
+# remediation R25). gitleaks is pinned by a checksum-verified release
+# download, trivy by digest and semgrep by ci/semgrep.lock's hashes; pip-audit
+# was the one scanner installed from PyPI unpinned, so its behavior could
+# change between two runs of the same commit.
 #
 # Must be resolved under the runner's Python or an older one, never a newer
 # one. The tenant deps job (platform-ci.yml, step "pip-audit

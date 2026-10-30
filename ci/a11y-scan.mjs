@@ -3,10 +3,10 @@
 // (contract §3 and R8; guidance in docs/APP-ACCESSIBILITY.md).
 //
 // The container job's smoke test already runs the exact image that will
-// deploy, on the runner, with no Cloudflare Access in front of it. This script
-// points a headless Chromium at that container, sends the headers the gateway
-// would stamp (R3; see identityHeaders) to the app's own origin only, runs
-// axe-core on each route, and reports:
+// deploy, on the runner, with no front door in front of it. This script
+// points a headless Chromium at that container, sends the headers the front
+// door would stamp (R3; see identityHeaders) to the app's own origin only,
+// runs axe-core on each route, and reports:
 //   - axe violations under the WCAG 2.0/2.1/2.2 A + AA tags, by impact;
 //   - which routes were scanned and which could not be (coverage);
 //   - an advisory response-header check (CSP, nosniff, framing, referrer
@@ -36,9 +36,15 @@
 //
 // Usage:
 //   node ci/a11y-scan.mjs --base <url> --axe <axe.min.js> [--app <name>]
+//     [--identity identity-aware|anonymous]
 //     [--mode report|enforce] [--ignore "<rule ids, space-separated>"]
 //     [--routes <inno-a11y.json>] [--summary <file>] [--json <file>]
 //     [--chrome <binary>] [--wait-healthz <seconds>] [--instance <instance.json>]
+//
+// --identity is the app's identity as /ci/policy serves it. An anonymous app
+// is told nobody's identity by the front door, so it is scanned with the four
+// identity headers empty, as it is served; any other value, or none, scans
+// it as a synthetic member (identityHeaders).
 //
 // The synthetic user's group is built from the instance's group prefix, read
 // from --instance <path>, else INNO_INSTANCE_JSON (the JSON itself, not a
@@ -57,13 +63,17 @@ import { spawn } from "node:child_process";
 import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { isMainModule, loadInstanceData, logSafe } from "./cli.mjs";
+import { annotationLine, isMainModule, loadInstanceData, logSafe } from "./cli.mjs";
 
 export const AXE_TAGS = ["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "wcag22aa"];
 export const BLOCKING_IMPACTS = ["critical", "serious"];
 export const IMPACT_ORDER = ["critical", "serious", "moderate", "minor"];
 export const MAX_ROUTES = 10;
 export const SCAN_USER = "a11y-scan@ci.invalid";
+// The synthetic person's subject (X-Forwarded-Subject). APP-CONTRACT R3 tells
+// apps to key per-person data on the subject, so a page that does renders as
+// it does for a signed-in person rather than for a caller with none.
+export const SCAN_SUBJECT = "a11y-scan";
 const NAV_TIMEOUT_MS = 20_000;
 const IDLE_QUIET_MS = 500;
 const IDLE_MAX_MS = 8_000;
@@ -160,21 +170,37 @@ export function parseMode(raw) {
 }
 
 /**
- * The headers the gateway owns under R3, as the scan sends them: a synthetic
- * member of the app's users group (<groupPrefix><app>-users, the gateway's
- * and src/naming.ts oktaGroupName's formula), and the forwarded host and
- * proto of --base. Those two are what is true on the runner (production
+ * Normalize the app's identity (--identity, from /ci/policy): only
+ * "anonymous" reads as anonymous, and anything else as "identity-aware",
+ * the scan every app had before identity existed (the policy job's
+ * fallback too).
+ *
+ * @param {string|undefined} raw
+ * @returns {"identity-aware"|"anonymous"}
+ */
+export function parseIdentity(raw) {
+  return raw === "anonymous" ? "anonymous" : "identity-aware";
+}
+
+/**
+ * The headers the front door owns under R3, as the scan sends them: a
+ * synthetic member of the app's users group (<groupPrefix><app>-users,
+ * src/naming.ts oktaGroupName's formula) with a synthetic subject, and the
+ * forwarded host and proto of --base. Those two are what is true on the runner (production
  * sends the app's hostname and https); APP-CONTRACT tells apps to build
  * links from them, and an https proto here would send an app's own
  * redirects off the scanned origin. Never throws, so scan() can keep its
  * promise of a result. main() never scans without a group prefix (it reports
  * unreadable instance data as "did not run"), so no group is sent only when
- * no app is named.
+ * no app is named. For an anonymous app the four identity headers are sent
+ * present and empty, as the front door serves that app every caller
+ * (front-door/identity.ts NO_IDENTITY), so its pages are checked as a caller
+ * with no identity sees them; the host and proto are the same.
  *
- * @param {{base: string, app?: string, groupPrefix?: string}} args
+ * @param {{base: string, app?: string, groupPrefix?: string, anonymous?: boolean}} args
  * @returns {Array<{name: string, value: string}>}
  */
-export function identityHeaders({ base, app, groupPrefix }) {
+export function identityHeaders({ base, app, groupPrefix, anonymous = false }) {
   let host = "";
   let proto = "";
   try {
@@ -183,9 +209,10 @@ export function identityHeaders({ base, app, groupPrefix }) {
     proto = u.protocol.replace(/:$/, "");
   } catch { /* no usable --base: the scan then fails as a whole, platform-side */ }
   return [
-    { name: "X-Forwarded-User", value: SCAN_USER },
-    { name: "X-Forwarded-Email", value: SCAN_USER },
-    { name: "X-Forwarded-Groups", value: app && groupPrefix ? `${groupPrefix}${app}-users` : "" },
+    { name: "X-Forwarded-User", value: anonymous ? "" : SCAN_USER },
+    { name: "X-Forwarded-Email", value: anonymous ? "" : SCAN_USER },
+    { name: "X-Forwarded-Groups", value: !anonymous && app && groupPrefix ? `${groupPrefix}${app}-users` : "" },
+    { name: "X-Forwarded-Subject", value: anonymous ? "" : SCAN_SUBJECT },
     { name: "X-Forwarded-Host", value: host },
     { name: "X-Forwarded-Proto", value: proto },
   ];
@@ -194,7 +221,7 @@ export function identityHeaders({ base, app, groupPrefix }) {
 /**
  * A same-origin request's headers with the identity headers set: any copy
  * the page sent of one of them (any case) is dropped first, so the app sees
- * exactly what the gateway would stamp, never what page script supplied.
+ * exactly what the front door would stamp, never what page script supplied.
  *
  * @param {Record<string, unknown>|undefined} headers - the request's headers
  * @param {Array<{name: string, value: string}>} identity
@@ -267,7 +294,7 @@ export function evaluate(result, mode, ignores) {
 
 /**
  * Advisory response-header findings for an HTML page served by the app.
- * HSTS is deliberately not checked: the gateway owns it (APP-SECURITY §1) and
+ * HSTS is deliberately not checked: the front door owns it (APP-SECURITY §1) and
  * a localhost response never carries it.
  *
  * @param {Record<string, string>} headers - response headers (any case)
@@ -399,10 +426,12 @@ export function renderSummary({ app, mode, result, outcome, headers, routesWarni
  * priority order: the verdict-level lines, then the response-header
  * advisories and the unscanned pages (each folded into one line when there
  * is more than one, so they always fit), then the findings, most severe
- * first, while their kind has room; a ::notice counts the findings that did
- * not fit. Every interpolated value passes through logSafe: rule ids and help
- * text come from axe, but routes and selectors come from the app and its DOM,
- * and a newline would end the command and forge a second one.
+ * first, while their kind has room; a notice counts the findings that did
+ * not fit. Every line is ci/cli.mjs's annotationLine (R7-5), which flattens
+ * and bounds every value, escapes the title as a property and the message's
+ * "%": rule ids and help text come from axe, but routes and selectors come
+ * from the app and its DOM, and a newline would end the command and forge a
+ * second one. The pieces keep their own tighter bounds as well.
  *
  * @returns {string[]}
  */
@@ -410,42 +439,43 @@ export function annotations({ mode, result, outcome, ignores, routesWarning,
   headers = /** @type {Array<{header: string, ok: boolean, note: string}>} */ ([]) }) {
   const out = [];
   const room = { error: ANNOTATIONS_PER_KIND, warning: ANNOTATIONS_PER_KIND };
-  const emit = (kind, rest) => {
-    if (kind in room) {
-      if (room[kind] === 0) return false;
-      room[kind]--;
+  const emit = (level, fields) => {
+    if (level in room) {
+      if (room[level] === 0) return false;
+      room[level]--;
     }
-    out.push(`::${kind} ${rest}`);
+    out.push(annotationLine({ level, ...fields }));
     return true;
   };
   if (outcome.verdict === "did-not-run") {
-    const kind = outcome.exitCode === 1 ? "error" : "warning";
+    const level = outcome.exitCode === 1 ? "error" : "warning";
     const why = outcome.exitCode === 3 ? " (platform-side; not blocking)" : "";
-    emit(kind, `title=Accessibility scan did not run::${logSafe(result.error ?? "no route could be scanned", 300)}; this is not a clean result${why}`);
+    emit(level, { title: "Accessibility scan did not run", what: logSafe(result.error ?? "no route could be scanned", 300),
+      fix: `this is not a clean result${why}` });
   }
   if (outcome.landingFault && outcome.verdict !== "did-not-run") {
-    const kind = outcome.exitCode === 1 ? "error" : "warning";
-    emit(kind, `title=Accessibility: landing page not scanned::/ could not be scanned (${logSafe(outcome.landingFault, 120)}); ` +
-      "the landing page is always checked, so other clean routes do not make up for it");
+    const level = outcome.exitCode === 1 ? "error" : "warning";
+    emit(level, { title: "Accessibility: landing page not scanned", what: `/ could not be scanned (${logSafe(outcome.landingFault, 120)})`,
+      fix: "the landing page is always checked, so other clean routes do not make up for it" });
   }
   if (outcome.verdict === "not-applicable") {
-    emit("notice", "title=Accessibility scan not applicable::no route answered HTML (an API-only app); nothing to check");
+    emit("notice", { title: "Accessibility scan not applicable", what: "no route answered HTML (an API-only app); nothing to check" });
   }
-  if (routesWarning) emit("warning", `title=Accessibility routes::${logSafe(routesWarning, 300)}`);
+  if (routesWarning) emit("warning", { title: "Accessibility routes", what: logSafe(routesWarning, 300) });
   const bad = headers.filter((f) => !f.ok);
   if (bad.length === 1) {
-    emit("warning", `title=Response header (advisory): ${logSafe(bad[0].header, 60)}::${logSafe(bad[0].note, 160)}`);
+    emit("warning", { title: `Response header (advisory): ${logSafe(bad[0].header, 60)}`, what: logSafe(bad[0].note, 160) });
   } else if (bad.length > 1) {
-    emit("warning", `title=Response headers (advisory)::${bad.length} to review: ` +
-      bad.map((f) => `${logSafe(f.header, 60)}: ${logSafe(f.note, 100)}`).join("; "));
+    emit("warning", { title: "Response headers (advisory)",
+      what: `${bad.length} to review: ${bad.map((f) => `${logSafe(f.header, 60)}: ${logSafe(f.note, 100)}`).join("; ")}` });
   }
   const unscanned = result.pages.filter((p) => p.status !== "scanned");
   if (unscanned.length === 1) {
     const [p] = unscanned;
-    emit("warning", `title=Accessibility: page not scanned::${logSafe(p.route, 80)}: ${logSafe(p.reason ?? p.status, 160)}`);
+    emit("warning", { title: "Accessibility: page not scanned", what: `${logSafe(p.route, 80)}: ${logSafe(p.reason ?? p.status, 160)}` });
   } else if (unscanned.length > 1) {
-    emit("warning", `title=Accessibility: ${unscanned.length} pages not scanned::` +
-      unscanned.map((p) => `${logSafe(p.route, 80)} (${logSafe(p.reason ?? p.status, 100)})`).join("; "));
+    emit("warning", { title: `Accessibility: ${unscanned.length} pages not scanned`,
+      what: unscanned.map((p) => `${logSafe(p.route, 80)} (${logSafe(p.reason ?? p.status, 100)})`).join("; ") });
   }
   const rows = [];
   for (const p of result.pages) {
@@ -460,18 +490,13 @@ export function annotations({ mode, result, outcome, ignores, routesWarning,
   let dropped = 0;
   for (const { p, v } of rows) {
     const blocking = BLOCKING_IMPACTS.includes(v.impact ?? "");
-    const kind = mode === "enforce" && blocking ? "error" : "warning";
+    const level = mode === "enforce" && blocking ? "error" : "warning";
     const where = v.targets && v.targets.length ? ` e.g. ${logSafe(v.targets[0], 80)}` : "";
-    if (!emit(kind, `title=Accessibility (${logSafe(v.impact ?? "unknown", 10)}): ${logSafe(v.id, 40)}::` +
-      `${logSafe(p.route, 80)}: ${logSafe(v.help, 140)}; ${Number(v.nodes) || 0} element(s)${where}. ${logSafe(v.helpUrl ?? "", 120)}`)) dropped++;
+    if (!emit(level, { title: `Accessibility (${logSafe(v.impact ?? "unknown", 10)}): ${logSafe(v.id, 40)}`,
+      what: `${logSafe(p.route, 80)}: ${logSafe(v.help, 140)}; ${Number(v.nodes) || 0} element(s)${where}. ${logSafe(v.helpUrl ?? "", 120)}` })) dropped++;
   }
-  if (dropped > 0) emit("notice", `title=Accessibility::${dropped} more finding(s) in the step summary`);
-  // The runner decodes %25, %0D and %0A in a command's message, so a literal
-  // "%0A" in a route or selector would display as a line break: escape "%".
-  return out.map((line) => {
-    const at = line.indexOf("::", 2);
-    return at === -1 ? line : line.slice(0, at + 2) + line.slice(at + 2).replace(/%/g, "%25");
-  });
+  if (dropped > 0) emit("notice", { title: "Accessibility", what: `${dropped} more finding(s) in the step summary` });
+  return out;
 }
 
 /**
@@ -596,6 +621,54 @@ function launchChrome(binary) {
   return { proc, profile };
 }
 
+// How long the scanner waits for the browser it killed to exit before it
+// removes the throwaway profile, and how that removal retries what a child
+// process still writing leaves behind (an ENOTEMPTY): up to
+// PROFILE_REMOVE_TRIES tries, pausing PROFILE_REMOVE_DELAY_MS times the try's
+// number after each failed one (2 s in all). The retry is the scanner's own:
+// rmSync's maxRetries and retryDelay do not pause as Node documents them on
+// the Node versions probed. A profile still left after that is one line,
+// never a crash: it sits under the scanner container's /tmp, which goes with
+// the container.
+export const BROWSER_EXIT_WAIT_MS = 5_000;
+export const PROFILE_REMOVE_TRIES = 5;
+export const PROFILE_REMOVE_DELAY_MS = 200;
+
+/**
+ * Kill the browser and remove its throwaway profile. Never throws: scan()
+ * calls it from its `finally`, where a throw would replace the scan's result.
+ * A browser that started and has not exited is sent SIGKILL and waited for
+ * until it exits or `waitMs` passes, whichever comes first; one that never
+ * started (a spawn error has no exit to wait for) or already exited is not
+ * waited for. The removal is tried up to PROFILE_REMOVE_TRIES times, with a
+ * longer pause after each failed try; only when every try failed is it one
+ * line on stderr.
+ */
+export async function closeBrowser(proc, profile, { remove = (dir) => rmSync(dir, { recursive: true, force: true }), waitMs = BROWSER_EXIT_WAIT_MS } = {}) {
+  if (proc.pid !== undefined && proc.exitCode === null && proc.signalCode === null) {
+    let timer;
+    const exited = new Promise((resolve) => {
+      timer = setTimeout(resolve, waitMs);
+      proc.once("exit", resolve);
+    });
+    proc.kill("SIGKILL");
+    await exited;
+    clearTimeout(timer);
+  }
+  for (let attempt = 1; ; attempt++) {
+    try {
+      remove(profile);
+      return;
+    } catch (e) {
+      if (attempt >= PROFILE_REMOVE_TRIES) {
+        console.error(`a11y-scan: the browser's throwaway profile was not removed (${logSafe(e && e.message ? e.message : e, 160)}); it goes with the scanner's container`);
+        return;
+      }
+    }
+    await sleep(PROFILE_REMOVE_DELAY_MS * attempt);
+  }
+}
+
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 // Page statuses that are the APP's doing (a 4xx, a blank shell, a redirect
@@ -611,8 +684,8 @@ export const APP_FAULT_STATUSES = ["http", "redirect", "blank", "timeout"];
  * Classify the status of a page's (same-origin) document response. A 4xx is
  * the app's own answer ("http", blocking in enforce, on "/" above all). A 5xx
  * is not held against it: CI runs the image with nothing behind
- * http://storage.internal (the platform's storage gateway, there once
- * deployed), so a page that reads storage can fail here and work in
+ * http://storage.internal (the platform's storage relay in the app's host,
+ * there once deployed), so a page that reads storage can fail here and work in
  * production, and blocking on it would fail an app for the scan environment.
  * It is listed as not scanned, with a warning.
  *
@@ -843,11 +916,14 @@ async function waitHealthz(base, seconds) {
 
 /**
  * Drive the browser over every route. Never throws: a failure to start is a
- * result with no scanned pages and an error string.
+ * result with no scanned pages and an error string. `removeProfile` is
+ * injected by the tests (the teardown's profile removal); unset, the
+ * teardown's own runs.
  */
-export async function scan({ base, routes, axeSource, app, groupPrefix, chrome, budgetMs = SCAN_BUDGET_MS }) {
+export async function scan({ base, routes, axeSource, app, groupPrefix, anonymous = false, chrome, budgetMs = SCAN_BUDGET_MS,
+  removeProfile = /** @type {((dir: string) => void) | undefined} */ (undefined) }) {
   const deadline = Date.now() + budgetMs;
-  const identity = identityHeaders({ base, app, groupPrefix });
+  const identity = identityHeaders({ base, app, groupPrefix, anonymous });
   const binary = chrome || findChrome();
   if (!binary) return { pages: [], infra: true, error: "no Chromium found in the scanner image" };
   const { proc, profile } = launchChrome(binary);
@@ -869,20 +945,20 @@ export async function scan({ base, routes, axeSource, app, groupPrefix, chrome, 
   } catch (e) {
     return { pages, axeVersion, infra: true, error: `browser failed: ${logSafe(e && e.message ? e.message : e, 160)}` };
   } finally {
-    proc.kill("SIGKILL");
-    rmSync(profile, { recursive: true, force: true });
+    await closeBrowser(proc, profile, { remove: removeProfile });
   }
 }
 
 // --- CLI --------------------------------------------------------------------
 
 const USAGE = "Usage: node ci/a11y-scan.mjs --base <url> --axe <axe.min.js> [--app <name>] " +
+  "[--identity identity-aware|anonymous] " +
   "[--mode report|enforce] [--ignore \"<rule ids, space-separated>\"] [--routes <inno-a11y.json>] " +
   "[--summary <file>] [--json <file>] [--chrome <binary>] [--wait-healthz <seconds>] [--instance <instance.json>]";
 // Every flag in USAGE. Anything else is refused rather than skipped: a typo
 // such as --wait-heathz would otherwise drop the setting it meant without a
 // word, and an unquoted --ignore list would lose all but its first rule id.
-const FLAGS = new Set(["base", "axe", "app", "mode", "ignore", "routes", "summary", "json", "chrome", "wait-healthz", "instance"]);
+const FLAGS = new Set(["base", "axe", "app", "identity", "mode", "ignore", "routes", "summary", "json", "chrome", "wait-healthz", "instance"]);
 
 /**
  * Parse `--flag value` pairs (a flag followed by another flag, or by
@@ -900,6 +976,26 @@ export function parseArgs(argv) {
     out[a.slice(2)] = val;
   }
   return out;
+}
+
+/**
+ * The options main() hands scan() from its arguments and the instance's
+ * group prefix: the one place --identity becomes `anonymous` (only
+ * "anonymous" reads as anonymous, parseIdentity), so a test can see what an
+ * anonymous app is scanned as without a browser (OPEN 90).
+ *
+ * @param {Record<string, string>} args - parseArgs' answer
+ * @param {string | null} groupPrefix - the instance's group prefix
+ * @returns {{ base: string, app: string, groupPrefix: string | null, anonymous: boolean, chrome: string }}
+ */
+export function scanOptions(args, groupPrefix) {
+  return {
+    base: args.base,
+    app: args.app,
+    groupPrefix,
+    anonymous: parseIdentity(args.identity) === "anonymous",
+    chrome: args.chrome,
+  };
 }
 
 export async function main(argv = process.argv.slice(2)) {
@@ -951,7 +1047,7 @@ export async function main(argv = process.argv.slice(2)) {
     // the scan environment's problem, reported but never blocking.
     result = { pages: [], infra: true, error: "the app did not answer /healthz 200 for the scan" };
   }
-  if (!result) result = await scan({ base: args.base, routes, axeSource, app: args.app, groupPrefix, chrome: args.chrome });
+  if (!result) result = await scan({ ...scanOptions(args, groupPrefix), routes, axeSource });
   const outcome = evaluate(result, mode, ignores);
   const first = result.pages.find((p) => p.headers && p.status === "scanned") ?? result.pages.find((p) => p.headers);
   const headers = first ? headerFindings(first.headers) : [];
@@ -975,7 +1071,8 @@ if (isMainModule(import.meta.url)) {
   // workflow also requires result.json to confirm exitCode 1 before it
   // blocks, which covers crashes before this module even loads.)
   const crashed = (e) => {
-    console.log(`::warning title=Accessibility scan crashed::${logSafe(e && e.message ? e.message : e, 200)} (platform-side; not blocking)`);
+    console.log(annotationLine({ level: "warning", title: "Accessibility scan crashed",
+      what: `${logSafe(e && e.message ? e.message : e, 200)} (platform-side; not blocking)` }));
     process.exit(3);
   };
   process.on("uncaughtException", crashed);
