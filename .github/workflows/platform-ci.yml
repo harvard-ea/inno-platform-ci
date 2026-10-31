@@ -20,7 +20,7 @@ name: Platform CI
 # `.github/workflows/deploy.yml` passes `with: app:`. (register_app returns that
 # deploy.yml and the plugin writes it; the template ships none. The repo and
 # its name belong to the user; the platform no longer generates
-# `inno-{app}` repos.) No caller workflow is trusted: its
+# `{app}` repos.) No caller workflow is trusted: its
 # contents can be edited by the app author. All enforcement lives here, in the
 # uneditable reusable workflow:
 #
@@ -141,7 +141,7 @@ jobs:
           INPUT_APP: ${{ inputs.app }}
         run: |
           APP="$INPUT_APP"
-          if [ -z "$APP" ]; then APP="${REPO_NAME#inno-}"; fi
+          if [ -z "$APP" ]; then APP="${REPO_NAME#}"; fi
           # `inputs.app` comes from the app's OWN deploy.yml (`with: app:`) and
           # was never validated here. A multiline value injected extra
           # steps.app.outputs.* entries; a value with shell metacharacters
