@@ -2,7 +2,7 @@
 // Dependency-cooldown gate (supply-chain hygiene): flags app dependencies whose
 // pinned version was published fewer than `min_release_age_days` days ago. A
 // freshly-published version is the highest-risk window for a compromised
-// release (typosquat, hijacked maintainer, malicious postinstall) — a short
+// release (typosquat, hijacked maintainer, malicious postinstall): a short
 // cooldown lets the ecosystem and scanners catch most of those before an app
 // can pull them. Complements the existing deps gate (npm/pip-audit catch
 // KNOWN-vulnerable versions; this catches TOO-NEW ones no one has vetted yet).
@@ -46,7 +46,7 @@ export function parseRequirements(text) {
 
 // Resolved versions from an npm lockfile (v2/v3 `packages` map). Three kinds
 // of entry are skipped: the root package (key ""), link entries (no version),
-// and workspace SOURCE entries — a path with no "node_modules/" segment, e.g.
+// and workspace SOURCE entries: a path with no "node_modules/" segment, e.g.
 // "packages/foo". The last one matters: it carries a real version, so a naive
 // split("node_modules/").pop() yields the literal "packages/foo" and asks the
 // registry to date local code that was never published (a guaranteed miss, and
@@ -108,7 +108,7 @@ async function pypiPublishedAt(fetchImpl, name, version) {
 
 // NOTE: this must fetch the FULL packument. The abbreviated-metadata document
 // (application/vnd.npm.install-v1+json) omits the `time` map entirely, so
-// requesting it would make every npm lookup return null — turning the cooldown
+// requesting it would make every npm lookup return null, turning the cooldown
 // gate into a no-op that still prints a pass line.
 async function npmPublishedAt(fetchImpl, name, version) {
   const res = await fetchImpl(`https://registry.npmjs.org/${name.replace("/", "%2F")}`, timeout());
@@ -132,7 +132,7 @@ async function resolvePublishTimes(entries, fetchImpl) {
   const skipped = [];
   // One lookup per DISTINCT ecosystem:name@version. A lockfile lists an entry
   // per install PATH, so a dependency hoisted into several trees would
-  // otherwise be fetched once per copy — same answer every time.
+  // otherwise be fetched once per copy: same answer every time.
   const dates = new Map();
   const distinct = [];
   for (const e of entries) {
@@ -189,7 +189,7 @@ export async function checkDepAge({ appDir, thresholdDays, functionShaped = fals
 
   const { resolved, skipped } = await resolvePublishTimes(entries, fetchImpl);
   const violations = evaluateAges(resolved, thresholdDays, nowMs);
-  // `checked` counts entries actually DATED — an entry the registry couldn't
+  // `checked` counts entries actually DATED: an entry the registry couldn't
   // date is reported under `skipped` and must not inflate the pass message.
   return { violations, checked: resolved.length - skipped.length, skipped, unpinnedNpm };
 }
@@ -282,12 +282,12 @@ export async function main({ appDir, thresholdDays, functionShaped } = {}) {
 if (isMainModule(import.meta.url)) {
   // A crash is the gate's failure too, said the way its verdicts are (an
   // unreadable manifest's error can quote what it read, so it is flattened).
-  main().then((code) => process.exit(code)).catch((e) => {
+  main().then((code) => { process.exitCode = code; }).catch((e) => {
     annotate({
       title: "Dependency cooldown",
       what: logSafe(String(e?.message ?? e)),
       fix: "re-run the workflow; if it repeats, ask a platform admin",
     });
-    process.exit(1);
+    process.exitCode = 1;
   });
 }

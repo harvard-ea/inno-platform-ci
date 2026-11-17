@@ -1,12 +1,12 @@
 #!/usr/bin/env node
 // Config-integrity gate: verifies an app repo has not weakened the security
 // posture the platform requires: required CLAUDE.md guidance present, no
-// platform-owned build input vendored into the app repo (the root build
-// files and ANY wrangler config; the platform supplies them at build time
-// from its mirror), nothing of the author's under src/ (which the platform
-// owns), and no package-manager configuration at any depth (npm expands
-// ${VAR} from the environment into it). The live checks are 1, 1b, 1c, 6, 6b,
-// 7, 7b and 8; see checkConfig's own note on the numbering.
+// platform-owned build input vendored into the app repo (the root build files
+// and ANY wrangler config at the repository root; the platform supplies them at
+// build time from its mirror), nothing of the author's under src/ (which the
+// platform owns), and no package-manager configuration at any depth (npm
+// expands ${VAR} from the environment into it). The live checks are 1, 1b, 1c,
+// 6, 6b, 7, 7b and 8; see checkConfig's own note on the numbering.
 //
 // Usage: node ci/check-config.mjs <app-dir>
 // Exits 0 if compliant, 1 (with violations printed) otherwise.
@@ -51,9 +51,11 @@ const PINNED_BUILD_INPUT_FILES = ["package.json", "package-lock.json", "tsconfig
 // wrangler.jsonc ?? wrangler.toml`, honoring env-variants too. The platform
 // supplies the ONLY permitted config (a function app's app-worker.jsonc, from
 // the mirror, which the app-build job bundles with; a container app has no
-// Worker config of its own), so ANY wrangler config committed to an app repo
-// is a shadow or a bypass and is rejected. `--config app-worker.jsonc` in
-// app-build's bundle step pins the file as the belt to this suspenders.
+// Worker config of its own), so ANY wrangler config at an app repository's
+// root, where that discovery looks, is a shadow or a bypass and is rejected
+// (check 1b reads the root alone, as APP-CONTRACT R7 states the rule).
+// `--config app-worker.jsonc` in app-build's bundle step pins the file as the
+// belt to this suspenders.
 // Matches a wrangler config file we must reject: the bare `wrangler.json` /
 // `wrangler.toml`, or any env-variant `wrangler.<something>.(json|jsonc|toml)`.
 // wrangler.jsonc itself never matches (no middle segment, and .jsonc is only
@@ -75,7 +77,7 @@ const ROOT_PACKAGE_MANAGER_CONFIG_RE = /^(\.npmrc|\.yarnrc|\.yarnrc\.yml|\.pnpmf
 // leave it. Skips .git; reports but does not enter node_modules. A directory
 // that cannot be read is NOT the same as an empty one: ENOENT (the path
 // vanished between being listed and being read, a genuine race) is the only
-// error swallowed — anything else (EACCES, EIO, ...) is rethrown, so the gate
+// error swallowed: anything else (EACCES, EIO, ...) is rethrown, so the gate
 // crashes red rather than silently passing a subtree it could not inspect.
 //
 // `isSymlink` is yielded because readdir already answered that question to
@@ -176,7 +178,7 @@ export function checkConfig(appDir) {
       }
       if (COMPETING_WRANGLER_RE.test(name)) {
         violation(name,
-          `${name} is a wrangler config file: apps may not carry ANY wrangler config; the platform injects it ` +
+          `${name} is a wrangler config file: apps may not carry ANY wrangler config at the repository root; the platform injects it ` +
             `(wrangler's config discovery could silently prefer it over the gate-vetted file)`,
         );
       }
@@ -297,9 +299,9 @@ export function checkConfig(appDir) {
   // of the directory it is
   // invoked in and expands ${VAR} from the environment into it, so a nested
   // .npmrc is an unpinned, credential-exfiltrating deploy-build input the
-  // same way the root one is. Other package managers' config at depth —
+  // same way the root one is. Other package managers' config at depth,
   // app/.yarnrc.yml (yarn berry's nodeLinker), app/pnpm-workspace.yaml (a
-  // pnpm workspace), app/bunfig.toml — is legitimate inside a container
+  // pnpm workspace), app/bunfig.toml, is legitimate inside a container
   // build and is left alone; only their ROOT copies are rejected, by check 6
   // above. NOT .env at depth either: wrangler reads .env from its cwd (the
   // root, which check 6 covers) and npm never reads it, so a nested
@@ -307,7 +309,7 @@ export function checkConfig(appDir) {
   //
   // The walk never follows symlinks (readdir types), fails closed on type (a
   // symlink NAMED .npmrc is rejected without resolving it), skips .git, and
-  // does not descend into node_modules — nothing under a node_modules
+  // does not descend into node_modules: nothing under a node_modules
   // directory is examined at all, because npm resolves its project rc from
   // the directory it is run in, never from inside node_modules.
   const appRoot = (() => { try { return realpathSync(appDir); } catch { return appDir; } })();
@@ -442,7 +444,7 @@ export function checkConfig(appDir) {
       lstatSync(join(appDir, relPath));
       present = true;
     } catch {
-      // ENOENT: nothing at this path — compliant.
+      // ENOENT: nothing at this path, compliant.
     }
     if (present) {
       violation(relPath,
@@ -474,20 +476,20 @@ if (isMainModule(import.meta.url)) {
   const [appDir] = process.argv.slice(2);
   if (!appDir) {
     console.error("Usage: node ci/check-config.mjs <app-dir>");
-    process.exit(1);
-  }
-
-  const { ok, violations } = checkConfig(appDir);
-  if (!ok) {
-    console.error("config-integrity check FAILED:");
-    for (const line of violationLines(violations)) console.error(line);
-    annotateAll({
-      title: "Config integrity",
-      fix: "fix it as get_app_contract R7 says, then push again",
-      items: violations.map((v) => ({ what: v.message, ...(v.file ? { file: v.file } : {}) })),
-    });
-    process.exitCode = 1;
+    process.exitCode = 2;
   } else {
-    console.log("config-integrity check passed.");
+    const { ok, violations } = checkConfig(appDir);
+    if (!ok) {
+      console.error("config-integrity check FAILED:");
+      for (const line of violationLines(violations)) console.error(line);
+      annotateAll({
+        title: "Config integrity",
+        fix: "fix it as get_app_contract R7 says, then push again",
+        items: violations.map((v) => ({ what: v.message, ...(v.file ? { file: v.file } : {}) })),
+      });
+      process.exitCode = 1;
+    } else {
+      console.log("config-integrity check passed.");
+    }
   }
 }

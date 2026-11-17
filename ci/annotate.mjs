@@ -19,11 +19,11 @@
 // safely. The container job's "Assert non-root user + EXPOSE 8080" and
 // "Smoke test /healthz" (it copies this file and cli.mjs out of its mirror
 // checkout, beside registry-mirror.sh, before the build context is read), the
-// app-build job's symlink guard (one call per link, with the link as
-// --file, for the first ten; the rest are named in one plain line), and the
-// deploy job's image check and finalize answer, all with --what. No step
-// uses --each today: it is the form for a step that has a list under one
-// title and one file. A step whose annotation is a fixed
+// symlink guard of the app-build and container jobs (one call per link, with
+// the link as --file, for the first ten; the rest are named in one plain
+// line), and the deploy job's image check and finalize answer, all with
+// --what. No step uses --each today: it is the form for a step that has a
+// list under one title and one file. A step whose annotation is a fixed
 // sentence prints it as a literal line, which
 // test/annotate-parity.node.test.ts holds equal to annotationLine.
 //
@@ -35,7 +35,7 @@
 
 import { readFileSync } from "node:fs";
 import { parseArgs } from "node:util";
-import { annotate, annotateAll, isMainModule } from "./cli.mjs";
+import { UsageError, annotate, annotateAll, isMainModule } from "./cli.mjs";
 
 const USAGE = [
   "Usage: node ci/annotate.mjs [--level <error|warning|notice>] --title <t> --what <w> [--fix <f>] [--file <p>]",
@@ -66,10 +66,10 @@ export function parseAnnotateArgs(argv) {
       allowPositionals: false,
     }));
   } catch {
-    throw new Error(USAGE);
+    throw new UsageError(USAGE);
   }
   const { level, title, what, fix, file, each } = values;
-  if (!["error", "warning", "notice"].includes(level) || !title || (what === undefined) === !each) throw new Error(USAGE);
+  if (!["error", "warning", "notice"].includes(level) || !title || (what === undefined) === !each) throw new UsageError(USAGE);
   return { level: /** @type {"error"|"warning"|"notice"} */ (level), title, what, fix, file, each };
 }
 
@@ -78,8 +78,10 @@ if (isMainModule(import.meta.url)) {
   try {
     args = parseAnnotateArgs(process.argv.slice(2));
   } catch (err) {
+    // Every refusal parseAnnotateArgs throws is a usage error (ci/cli.mjs's
+    // exit-code rule).
     console.error(String(err?.message ?? err));
-    process.exitCode = 1;
+    process.exitCode = 2;
   }
   if (args) {
     const { level, title, what, fix, file, each } = args;

@@ -54,7 +54,7 @@
 
 import { readFile } from "node:fs/promises";
 import { brokerPost } from "./broker-post.mjs";
-import { ANNOTATION_WHAT_MAX, annotate, isMainModule, logSafe, parseIntegerArg } from "./cli.mjs";
+import { ANNOTATION_WHAT_MAX, UsageError, annotate, isMainModule, logSafe, parseIntegerArg } from "./cli.mjs";
 
 /** The most findings one POST carries. */
 export const MAX_FINDINGS = 200;
@@ -267,7 +267,7 @@ export async function postFailure({ base, token, lane, app, reason }, fetcher = 
 // The lane's endpoint and label, or a refusal naming the two there are.
 function laneOf(lane) {
   const to = Object.hasOwn(LANES, lane) ? LANES[lane] : undefined;
-  if (!to) throw new Error(`unknown lane ${JSON.stringify(logSafe(lane, 40))}: use "trivy" or "npm"`);
+  if (!to) throw new UsageError(`unknown lane ${JSON.stringify(logSafe(lane, 40))}: use "trivy" or "npm"`);
   return to;
 }
 
@@ -336,7 +336,7 @@ if (isMainModule(import.meta.url)) {
   try {
     if (mode === "gate") {
       const [auditPath] = args;
-      if (!auditPath) throw new Error(USAGE.gate);
+      if (!auditPath) throw new UsageError(USAGE.gate);
       const findings = normalizeNpm(await readReport(auditPath));
       const ignores = (process.env.IGNORES ?? "").split(/\s+/).filter(Boolean);
       const survivors = gateSurvivors(findings, ignores);
@@ -358,36 +358,37 @@ if (isMainModule(import.meta.url)) {
       }
     } else if (mode === "post") {
       const [lane, base, app, deploymentId, reportPath, token] = args;
-      if (!lane || !base || !app || !deploymentId || !reportPath || !token) throw new Error(USAGE.post);
-      if (!Object.hasOwn(NORMALIZERS, lane)) throw new Error(`unknown lane ${JSON.stringify(logSafe(lane, 40))}: use "trivy" or "npm"`);
+      if (!lane || !base || !app || !deploymentId || !reportPath || !token) throw new UsageError(USAGE.post);
+      if (!Object.hasOwn(NORMALIZERS, lane)) throw new UsageError(`unknown lane ${JSON.stringify(logSafe(lane, 40))}: use "trivy" or "npm"`);
       const deploymentIdNum = parseIntegerArg("deploymentId", deploymentId);
       const findings = NORMALIZERS[lane](await readReport(reportPath));
       const result = await postFindings({ base, token, lane, app, deploymentId: deploymentIdNum, findings });
       console.log(`${LANES[lane].label}: ${logSafe(JSON.stringify(result), Infinity)}`);
     } else if (mode === "no-deps") {
       const [base, app, deploymentId, token] = args;
-      if (!base || !app || !deploymentId || !token) throw new Error(USAGE["no-deps"]);
+      if (!base || !app || !deploymentId || !token) throw new UsageError(USAGE["no-deps"]);
       const deploymentIdNum = parseIntegerArg("deploymentId", deploymentId);
       const result = await postFindings({ base, token, lane: "npm", app, deploymentId: deploymentIdNum, findings: [] });
       console.log(`${LANES.npm.label}: ${logSafe(JSON.stringify(result), Infinity)}`);
     } else if (mode === "post-failed") {
       const [lane, base, app, reason, token] = args;
-      if (!lane || !base || !app || !reason || !token) throw new Error(USAGE["post-failed"]);
+      if (!lane || !base || !app || !reason || !token) throw new UsageError(USAGE["post-failed"]);
       const result = await postFailure({ base, token, lane, app, reason });
       console.log(`${LANES[lane].label}: ${logSafe(JSON.stringify(result), Infinity)}`);
     } else {
-      throw new Error(`unknown mode ${JSON.stringify(logSafe(mode ?? "", 40))}: use "gate", "post", "no-deps" or "post-failed"`);
+      throw new UsageError(`unknown mode ${JSON.stringify(logSafe(mode ?? "", 40))}: use "gate", "post", "no-deps" or "post-failed"`);
     }
   } catch (err) {
     const message = String(err?.message ?? err);
     // The tenant gate's failure is the author's to see on the run page; the
-    // sweep's, and any usage line, stay plain (flattened: a report's parse
-    // error quotes the raw file).
-    if (mode === "gate" && !message.startsWith("Usage:")) {
+    // sweep's, and any usage error, stay plain (flattened: a report's parse
+    // error quotes the raw file). A usage error exits 2 (ci/cli.mjs's
+    // exit-code rule).
+    if (mode === "gate" && !(err instanceof UsageError)) {
       annotate({ title: "Dependency gate", what: message, fix: "re-run the workflow; if it repeats, ask a platform admin" });
     } else {
       console.error(logSafe(message, Infinity));
     }
-    process.exitCode = 1;
+    process.exitCode = err instanceof UsageError ? 2 : 1;
   }
 }

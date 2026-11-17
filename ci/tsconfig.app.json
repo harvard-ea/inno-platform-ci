@@ -12,7 +12,8 @@
   // to that root copy. Paths are relative to that root, where the author's
   // code lives under app/. No test entry and no types package: the build
   // runs no test suite and no typecheck (esbuild strips types without
-  // reading them), and ci/build installs wrangler alone, so a `types` entry
-  // here would name a package the build never has.
+  // reading them), and ci/build installs only the build tools (wrangler,
+  // esbuild and the Tailwind CLI), no types package, so a `types` entry here
+  // would name a package the build never has.
   "include": ["app"]
 }

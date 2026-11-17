@@ -31,7 +31,7 @@
 
 import { readFile } from "node:fs/promises";
 import { brokerPost, reportRefusal } from "./broker-post.mjs";
-import { isMainModule, logSafe } from "./cli.mjs";
+import { UsageError, isMainModule, logSafe } from "./cli.mjs";
 
 /**
  * POST {app, sbom, image_id?} to `${base}/deploy-sbom`, authenticated with the
@@ -60,7 +60,7 @@ if (isMainModule(import.meta.url)) {
   try {
     const [base, app, sbomPath, token, imageId] = process.argv.slice(2);
     if (!base || !app || !sbomPath || !token) {
-      throw new Error("Usage: node ci/sbom-upload.mjs <brokerUrl> <app> <sbomPath> <token> [imageId]");
+      throw new UsageError("Usage: node ci/sbom-upload.mjs <brokerUrl> <app> <sbomPath> <token> [imageId]");
     }
     let sbom;
     try {
@@ -73,16 +73,16 @@ if (isMainModule(import.meta.url)) {
     // is flattened (logSafe breaks the runner's ##[ marker too).
     console.log(`deploy-sbom: ${logSafe(JSON.stringify(result), Infinity)}`);
   } catch (err) {
-    const raw = String(err?.message ?? err);
-    if (raw.startsWith("Usage:")) {
-      console.error(raw);
+    if (err instanceof UsageError) {
+      console.error(err.message);
+      process.exitCode = 2;
     } else {
       reportRefusal(err, {
         label: "deploy-sbom",
         title: "SBOM upload failed",
         fix: "this release cannot deploy without it: fix what the message names, then re-run the release's workflow",
       });
+      process.exitCode = 1;
     }
-    process.exitCode = 1;
   }
 }

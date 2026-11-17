@@ -28,6 +28,22 @@
 // that replaced it missed every symlinked path (isMainModule says why). Both
 // sides are now compared as real file paths, and fileURLToPath undoes
 // exactly the encoding Node's own import.meta.url applies.
+//
+// The exit-code rule (CI-12, CI-13, v0.18.16). Every ci/ and scripts/ CLI
+// runs its main block under isMainModule, so importing it runs nothing, and
+// ends by setting process.exitCode and returning, never by calling
+// process.exit: the process then ends once its writes have drained, where an
+// exit right after a write can cut a piped stdout short (scripts/compat.mjs
+// writes a record tens of KB long to one). Success exits 0 and a failure of
+// the work 1, a manifest or other input that does not load among them. A
+// usage error exits 2: an argument the usage line refuses, whether one is
+// missing or extra, or a command, mode, lane or flag it does not name,
+// or the environment its usage line names is missing. A CLI whose catch-all
+// would read one as a failure throws it as a UsageError (below). Two exceptions, each documented in its own file:
+// ci/a11y-scan.mjs exits 3 on a crash, through process.exit, the one call
+// the rule allows, since a handler that returned would leave the process
+// running; and ci/explain-unresolved.mjs exits 0 in every case, since it
+// explains a failure the step's own exit already reports.
 import { readFileSync, realpathSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -56,6 +72,14 @@ export function isMainModule(importMetaUrl) {
   if (!process.argv[1]) return false;
   return realPath(fileURLToPath(importMetaUrl)) === realPath(process.argv[1]);
 }
+
+/**
+ * A usage error: an argument the CLI's usage line refuses. A CLI throws one
+ * where its catch-all would otherwise read the refusal as a failure of the
+ * work, prints its message, and exits 2 for it (the exit-code rule, in the
+ * header).
+ */
+export class UsageError extends Error {}
 
 /**
  * Parse a numeric CLI argument the workflow read out of a JSON response with

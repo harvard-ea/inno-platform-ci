@@ -31,7 +31,7 @@
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { brokerPost, reportRefusal, withBusyRetry } from "./broker-post.mjs";
-import { annotate, isMainModule, logSafe, parseIntegerArg } from "./cli.mjs";
+import { UsageError, annotate, isMainModule, logSafe, parseIntegerArg } from "./cli.mjs";
 
 // A FAILURE-SHAPE guard, not a security bound. The platform already refuses an
 // oversized body at 64 KiB (readAppBody's DEFAULT_MAX_BODY_BYTES), but it does
@@ -43,9 +43,10 @@ import { annotate, isMainModule, logSafe, parseIntegerArg } from "./cli.mjs";
 // (32 names x [64-char name + 200-char description + syntax] is about 10 KB)
 // and half the broker's body cap, so it can never refuse a valid file and can
 // never be the thing that trips the broker's bound.
-// test/doc-parity.node.test.ts pins the relationship to APP_VARIABLE_LIMIT and
-// DESCRIPTION_MAX; this constant is NOT derived, because ci/ ships standalone
-// in the public mirror and imports nothing from src/ on purpose.
+// test/doc-parity/values.node.test.ts pins the relationship to
+// APP_VARIABLE_LIMIT and DESCRIPTION_MAX; this constant is NOT derived,
+// because ci/ ships standalone in the public mirror and imports nothing from
+// src/ on purpose.
 export const MAX_DECLARATION_BYTES = 32 * 1024;
 
 /**
@@ -125,8 +126,8 @@ export async function finalize({ base, token, app, deploymentId, imageId, image,
   };
   // A 409 app_busy (another change holds the app's lease) is retried on
   // ci/broker-post.mjs's one schedule: failing there would fail a deploy CI
-  // has already handed over, leaving the app `deploying` until the job is
-  // re-run.
+  // has already handed over, leaving the app `deploying` until someone does
+  // what its refusal says: re-run the release's workflow.
   return withBusyRetry("deploy-complete", () => brokerPost(
     { base, path: "/deploy-complete", label: "deploy-complete", token, body, timeoutMs: FINALIZE_TIMEOUT_MS },
     fetcher,
@@ -147,16 +148,16 @@ export async function finalize({ base, token, app, deploymentId, imageId, image,
 // still held (app_busy, the app left to the recovery sweep) rather than take
 // it over from a rollout that already landed. No answer within it throws
 // `deploy-complete failed: no answer within 540 s`, which is not retried.
-// test/doc-parity.node.test.ts pins it above that sum and below the lease;
-// it is NOT derived, because ci/ ships standalone in the public mirror and
-// imports nothing from src/ on purpose.
+// test/doc-parity/operations-7-13.node.test.ts pins it above that sum and
+// below the lease; it is NOT derived, because ci/ ships standalone in the
+// public mirror and imports nothing from src/ on purpose.
 export const FINALIZE_TIMEOUT_MS = 540_000;
 
 if (isMainModule(import.meta.url)) {
   try {
     const [base, app, deploymentId, token, imageIdArg, imageArg, bundleArg] = process.argv.slice(2);
     if (!base || !app || !deploymentId || !token) {
-      throw new Error("Usage: node ci/deploy-finalize.mjs <brokerUrl> <app> <deploymentId> <token> [imageId] [image] [bundle]");
+      throw new UsageError("Usage: node ci/deploy-finalize.mjs <brokerUrl> <app> <deploymentId> <token> [imageId] [image] [bundle]");
     }
     // The broker's /deploy-token response is where this came from (via
     // `jq -r .deployment_id`); parseIntegerArg says what a malformed one
@@ -194,15 +195,15 @@ if (isMainModule(import.meta.url)) {
     console.error(`deploy-complete: ${logSafe(JSON.stringify(result), Infinity)}`);
     console.log(JSON.stringify(result));
   } catch (err) {
-    const raw = String(err?.message ?? err);
-    if (raw.startsWith("Usage:")) {
-      console.error(raw);
+    if (err instanceof UsageError) {
+      console.error(err.message);
+      process.exitCode = 2;
     } else {
       // A malformed deployment id is this CLI's own refusal, and reads as it is.
       reportRefusal(err, {
         label: "deploy-complete", title: "Deploy not finalized", fix: "re-run the release's workflow", asIs: ["invalid deploymentId"],
       });
+      process.exitCode = 1;
     }
-    process.exitCode = 1;
   }
 }

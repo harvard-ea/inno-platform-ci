@@ -32,7 +32,10 @@ work="$(mktemp -d)"
 had_conf=false
 if sudo test -f "$conf"; then
   had_conf=true
-  sudo cat "$conf" > "$work/before.json"
+  # The read is the privileged half, and the copy is written as this user,
+  # into this script's own work directory. A read that fails leaves an empty
+  # copy, which the merge below refuses, leaving the file as it is.
+  sudo cat "$conf" | tee "$work/before.json" >/dev/null
 else
   echo '{}' > "$work/before.json"
 fi

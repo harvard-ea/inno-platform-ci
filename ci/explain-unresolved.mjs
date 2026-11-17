@@ -18,10 +18,16 @@
 //
 // It explains, it never judges. Exit status is 0 in every case (the bundle
 // step's own `exit 1` is what fails the run, so a non-zero exit here would
-// only mask wrangler's failure with the explainer's), and it prints nothing
-// at all when there is nothing to explain: no unresolved line in the log, a
-// log it cannot read, or an unresolved package that is already a production
-// dependency, which means the bundle failed for some other reason.
+// only mask wrangler's failure with the explainer's), the one exception
+// ci/cli.mjs's exit-code rule names, and it prints nothing at all when there
+// is nothing to explain: no unresolved line in the log, a log it cannot
+// read, or an unresolved package that is already a production dependency,
+// which means the bundle failed for some other reason.
+//
+// explainUnresolved reads the log and the manifest's text into the two
+// lists, and annotateUnresolved writes them; the CLI below runs only when
+// this is the main module (ci/cli.mjs isMainModule, since v0.18.16, CI-12),
+// so a test or another script imports the two without running anything.
 //
 // The annotations follow the one rule (ci/cli.mjs annotateAll, R7-5): one
 // call per title, the two sharing the step's ten lines, on stderr. The
@@ -34,7 +40,7 @@
 // local import, ships beside it.
 
 import { readFileSync } from "node:fs";
-import { ANNOTATIONS_PER_STEP, annotateAll } from "./cli.mjs";
+import { ANNOTATIONS_PER_STEP, annotateAll, isMainModule } from "./cli.mjs";
 
 // wrangler surfaces esbuild's wording verbatim, in double quotes
 // (`✘ [ERROR] Could not resolve "vitest"`), sometimes followed by a resolved
@@ -83,72 +89,98 @@ function readOrEmpty(path) {
   }
 }
 
-const [, , logPath, manifestPath] = process.argv;
-const log = readOrEmpty(logPath);
-
-let manifest = {};
-try {
-  const parsed = JSON.parse(readOrEmpty(manifestPath));
-  if (parsed && typeof parsed === "object") manifest = parsed;
-} catch {
-  // An app/package.json that is absent or unparseable declares nothing, which
-  // is exactly what the "not declared anywhere" branch below says.
-}
-// optionalDependencies is installed by npm ci --omit=dev same as dependencies,
-// so a package declared only there is silent, not "not declared", like a
-// production dependency.
-const prod = { ...(manifest.dependencies ?? {}), ...(manifest.optionalDependencies ?? {}) };
-const dev = manifest.devDependencies ?? {};
-
-// First-seen order, one annotation per package: wrangler names the same
-// package once per import site, and three copies of one explanation is noise
-// the author has to read past to find the second problem.
-const seen = new Set();
-const devImports = [];
-const undeclared = [];
-for (const m of log.matchAll(UNRESOLVED)) {
-  const pkg = packageOf(m[1]);
-  if (pkg === null || seen.has(pkg)) continue;
-  seen.add(pkg);
-  // Already a production dependency, so --omit=dev is not why this failed.
-  // Saying anything here would send the author after the wrong cause.
-  if (Object.prototype.hasOwnProperty.call(prod, pkg)) continue;
-  if (Object.prototype.hasOwnProperty.call(dev, pkg)) {
-    // The move keeps the specifier and the locked version (OPEN 61). With npm
-    // 11, `npm install <pkg> && npm uninstall --save-dev <pkg>` removes the
-    // package from package.json altogether, and `npm install --save-prod`
-    // re-resolves it and rewrites an exact pin as a range. The subshell leaves
-    // the author's shell at the repo root, where the commit runs. pkg is safe
-    // inside single quotes: NPM_NAME admits no quote.
-    devImports.push({
-      what: `"${pkg}" is declared under devDependencies in `
-        + "app/package.json but your production code imports it. Since platform v0.14.21 CI installs "
-        + "production dependencies only (npm ci --omit=dev), so it is not present at bundle time. Move it: "
-        + `(cd app && p='${pkg}' && spec="$(npm pkg get "devDependencies[$p]" | tr -d '"')" && test "$spec" != "{}" `
-        + `&& npm pkg set "dependencies[$p]=$spec" && npm pkg delete "devDependencies[$p]" && npm install `
-        + "--package-lock-only)",
-    });
-  } else {
-    undeclared.push({
-      what: `"${pkg}" is imported by your production code but not declared in `
-        + `app/package.json. Declare it: cd app && npm install ${pkg}`,
-    });
+/**
+ * The two lists a wrangler log's unresolved imports make against the app's
+ * package.json, in first-seen order and one item a package: each a
+ * devDependency the production code imports, or a package declared nowhere.
+ * A package already in dependencies or optionalDependencies is in neither.
+ *
+ * @param {string} log - wrangler's log ("" when it could not be read)
+ * @param {string} manifestText - app/package.json's text ("" when absent)
+ * @returns {{ devImports: Array<{ what: string }>, undeclared: Array<{ what: string }> }}
+ */
+export function explainUnresolved(log, manifestText) {
+  let manifest = {};
+  try {
+    const parsed = JSON.parse(manifestText);
+    if (parsed && typeof parsed === "object") manifest = parsed;
+  } catch {
+    // An app/package.json that is absent or unparseable declares nothing, which
+    // is exactly what the "not declared anywhere" branch below says.
   }
+  // optionalDependencies is installed by npm ci --omit=dev same as dependencies,
+  // so a package declared only there is silent, not "not declared", like a
+  // production dependency.
+  const prod = { ...(manifest.dependencies ?? {}), ...(manifest.optionalDependencies ?? {}) };
+  const dev = manifest.devDependencies ?? {};
+
+  // First-seen order, one annotation per package: wrangler names the same
+  // package once per import site, and three copies of one explanation is noise
+  // the author has to read past to find the second problem.
+  const seen = new Set();
+  const devImports = [];
+  const undeclared = [];
+  for (const m of log.matchAll(UNRESOLVED)) {
+    const pkg = packageOf(m[1]);
+    if (pkg === null || seen.has(pkg)) continue;
+    seen.add(pkg);
+    // Already a production dependency, so --omit=dev is not why this failed.
+    // Saying anything here would send the author after the wrong cause.
+    if (Object.prototype.hasOwnProperty.call(prod, pkg)) continue;
+    if (Object.prototype.hasOwnProperty.call(dev, pkg)) {
+      // The move keeps the specifier and the locked version (OPEN 61). With npm
+      // 11, `npm install <pkg> && npm uninstall --save-dev <pkg>` removes the
+      // package from package.json altogether, and `npm install --save-prod`
+      // re-resolves it and rewrites an exact pin as a range. The subshell leaves
+      // the author's shell at the repo root, where the commit runs. pkg is safe
+      // inside single quotes: NPM_NAME admits no quote.
+      devImports.push({
+        what: `"${pkg}" is declared under devDependencies in `
+          + "app/package.json but your production code imports it. Since platform v0.14.21 CI installs "
+          + "production dependencies only (npm ci --omit=dev), so it is not present at bundle time. Move it: "
+          + `(cd app && p='${pkg}' && spec="$(npm pkg get "devDependencies[$p]" | tr -d '"')" && test "$spec" != "{}" `
+          + `&& npm pkg set "dependencies[$p]=$spec" && npm pkg delete "devDependencies[$p]" && npm install `
+          + "--package-lock-only)",
+      });
+    } else {
+      undeclared.push({
+        what: `"${pkg}" is imported by your production code but not declared in `
+          + `app/package.json. Declare it: cd app && npm install ${pkg}`,
+      });
+    }
+  }
+  return { devImports, undeclared };
 }
-// The two titles share the step's ANNOTATIONS_PER_STEP lines. Each list
-// shows whole while both fit; past that, the first keeps at least half,
-// and as much more as the second leaves free, and the second takes the rest.
-const devLimit = undeclared.length === 0 ? ANNOTATIONS_PER_STEP
-  : Math.max(ANNOTATIONS_PER_STEP - undeclared.length, ANNOTATIONS_PER_STEP / 2);
-annotateAll({
-  title: "devDependency imported at runtime",
-  fix: "commit app/package.json and app/package-lock.json, then push again. The dependency gate will audit it from then on.",
-  items: devImports,
-  limit: devLimit,
-});
-annotateAll({
-  title: "Undeclared import",
-  fix: "commit both manifest files, then push again.",
-  items: undeclared,
-  limit: ANNOTATIONS_PER_STEP - Math.min(devImports.length, devLimit),
-});
+
+/**
+ * Write explainUnresolved's two lists to `out` (stderr by default), one
+ * annotateAll call per title. The two titles share the step's
+ * ANNOTATIONS_PER_STEP lines. Each list shows whole while both fit; past
+ * that, the first keeps at least half, and as much more as the second
+ * leaves free, and the second takes the rest. Writes nothing for two empty
+ * lists.
+ *
+ * @param {{ devImports: Array<{ what: string }>, undeclared: Array<{ what: string }> }} lists
+ * @param {{ write: (s: string) => unknown }} [out]
+ */
+export function annotateUnresolved({ devImports, undeclared }, out = process.stderr) {
+  const devLimit = undeclared.length === 0 ? ANNOTATIONS_PER_STEP
+    : Math.max(ANNOTATIONS_PER_STEP - undeclared.length, ANNOTATIONS_PER_STEP / 2);
+  annotateAll({
+    title: "devDependency imported at runtime",
+    fix: "commit app/package.json and app/package-lock.json, then push again. The dependency gate will audit it from then on.",
+    items: devImports,
+    limit: devLimit,
+  }, out);
+  annotateAll({
+    title: "Undeclared import",
+    fix: "commit both manifest files, then push again.",
+    items: undeclared,
+    limit: ANNOTATIONS_PER_STEP - Math.min(devImports.length, devLimit),
+  }, out);
+}
+
+if (isMainModule(import.meta.url)) {
+  const [, , logPath, manifestPath] = process.argv;
+  annotateUnresolved(explainUnresolved(readOrEmpty(logPath), readOrEmpty(manifestPath)));
+}

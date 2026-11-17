@@ -2,6 +2,8 @@
   "name": "inno-tenant-build",
   "private": true,
   "devDependencies": {
+    "@tailwindcss/cli": "4.3.3",
+    "esbuild": "0.28.1",
     "wrangler": "4.148.0"
   },
   "overrides": {

@@ -7,8 +7,8 @@
 // image's id the container job recorded; a function app's answer carries
 // neither (the platform uploads its Worker), and each is then "". The step
 // masks the token before anything else is logged and writes the three to its
-// outputs. The answer's other fields (expires_on, shape, perimeter) are read
-// by no step and are not printed.
+// outputs. The answer's other field (expires_on) is read by no step and is
+// not printed.
 //
 // Usage: node ci/deploy-token.mjs <brokerUrl> <app> <token>
 // `token` is the GitHub Actions OIDC token (audience inno-platform-deploy).
@@ -38,8 +38,9 @@ import { isMainModule } from "./cli.mjs";
 // default for the reports (BROKER_TIMEOUT_MS). The broker does a deployment's
 // first writes (and, for a container app, mints the push token) before it
 // answers, which takes seconds; a broker that holds the connection longer is
-// failing, and the job is re-run. No answer within it throws
-// `deploy-token failed: no answer within 30 s`, which is not retried.
+// failing, and the remedy is to re-run the release's workflow. No answer
+// within it throws `deploy-token failed: no answer within 30 s`, which is
+// not retried.
 export const DEPLOY_TOKEN_TIMEOUT_MS = 30_000;
 
 /**
@@ -78,7 +79,7 @@ if (isMainModule(import.meta.url)) {
   const [base, app, token] = process.argv.slice(2);
   if (!base || !app || !token) {
     console.error(USAGE);
-    process.exitCode = 1;
+    process.exitCode = 2;
   } else {
     try {
       // stdout is the JSON alone: the step parses it with jq. Everything else,

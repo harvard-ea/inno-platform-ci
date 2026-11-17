@@ -36,7 +36,7 @@ import { createHash } from "node:crypto";
 import { closeSync, constants, fstatSync, lstatSync, openSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { refusalText, reportRefusal } from "./broker-post.mjs";
-import { isMainModule, logSafe, parseIntegerArg } from "./cli.mjs";
+import { UsageError, isMainModule, logSafe, parseIntegerArg } from "./cli.mjs";
 
 // The largest form the platform takes, before compression: its own memory
 // bound (a finalize holds up to about four copies of the form in one isolate
@@ -45,7 +45,7 @@ import { isMainModule, logSafe, parseIntegerArg } from "./cli.mjs";
 // compression and enforces itself at upload. Checked here twice, so an author
 // learns it from the build on every push rather than from a refused release:
 // in app-build, as soon as the bundle exists, and again on the bytes this
-// script hands over. test/doc-parity.node.test.ts pins it to src/'s
+// script hands over. test/doc-parity/values.node.test.ts pins it to src/'s
 // MAX_BUNDLE_BYTES; it is NOT imported from there, because ci/ ships
 // standalone in the public mirror and imports nothing from src/ on purpose.
 export const MAX_BUNDLE_BYTES = 16 * 1024 * 1024;
@@ -216,7 +216,7 @@ export async function handOver({ base, app, deploymentId, token, dir, expected, 
     text = await res.text();
   } catch (e) {
     if (e?.name === "TimeoutError") {
-      throw new Error(`deploy-bundle failed: the platform did not answer within ${timeoutMs / 1000} s; re-run the job`);
+      throw new Error(`deploy-bundle failed: the platform did not answer within ${timeoutMs / 1000} s; re-run the release's workflow`);
     }
     throw e;
   }
@@ -249,11 +249,11 @@ if (isMainModule(import.meta.url)) {
   try {
     const argv = process.argv.slice(2);
     if (argv[0] === "--digest") {
-      if (argv.length !== 2 || !argv[1]) throw new Error(USAGE);
+      if (argv.length !== 2 || !argv[1]) throw new UsageError(USAGE);
       console.log(readBundle(argv[1]).sha256);
     } else if (argv[0] === "--verify") {
       // The expected digest is verifyBundle's to refuse, as in the hand-over.
-      if (argv.length !== 3 || !argv[1]) throw new Error(USAGE);
+      if (argv.length !== 3 || !argv[1]) throw new UsageError(USAGE);
       verifyBundle(argv[1], argv[2]);
       console.error(`deploy-bundle: the downloaded bundle is the one app-build built (sha256 ${argv[2]})`);
     } else {
@@ -261,7 +261,7 @@ if (isMainModule(import.meta.url)) {
       // handOver's refusal to make, with its own message, so that the case a
       // skipped app-build step produces reads as what it is.
       const [base, app, deploymentId, token, dir, expected] = argv;
-      if (!base || !app || !deploymentId || !token || !dir || argv.length !== 6) throw new Error(USAGE);
+      if (!base || !app || !deploymentId || !token || !dir || argv.length !== 6) throw new UsageError(USAGE);
       const staged = await handOver({
         base, app, deploymentId: parseIntegerArg("deploymentId", deploymentId), token, dir, expected,
       });
@@ -280,12 +280,12 @@ if (isMainModule(import.meta.url)) {
     // Every message is already flattened where it quotes anything from
     // outside this script; logSafe and annotate flatten it again, which is
     // what keeps that true for a message added later.
-    const message = String(err?.message ?? err);
-    if (message.startsWith("Usage:")) {
-      console.error(message);
+    if (err instanceof UsageError) {
+      console.error(err.message);
+      process.exitCode = 2;
     } else {
       reportRefusal(err, { label: "deploy-bundle", title: "App Worker bundle", fix: "" });
+      process.exitCode = 1;
     }
-    process.exitCode = 1;
   }
 }

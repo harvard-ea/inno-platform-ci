@@ -13,26 +13,27 @@
 // `token` is a fresh GitHub Actions OIDC token (audience
 // inno-platform-deploy), minted by the step before this one.
 //
-// The job has already failed when this runs, so this step adds no failure:
-// once its arguments parse it exits 0 whatever the platform answers, and
-// says what happened in one annotation on stderr (ci/cli.mjs annotate; stdout
-// stays empty). Released: a notice naming the state the app is back in.
-// Refused as not this app's deploy in flight (`deployment_not_abandonable`,
-// e.g. a finalize that completed first): a notice with the platform's
-// sentence, since there is nothing to release. Anything else, no answer
-// within the bound, or a platform from before this route (a bare 405 from
-// its asset router): a warning that the recovery sweep releases the app
-// later. A 409 app_busy (a finalize still running under the app's lease, or
-// another change to the app) is retried on ci/broker-post.mjs's one
-// schedule; each attempt waits at most
-// ABANDON_TIMEOUT_MS. A missing or empty token means the step before this
-// one, which mints it, failed: that is the job's failure already, so it is
-// the same warning and exit 0, with no request sent, rather than a second
-// red step (v0.17.6, build decision 16). Exit 1, with the usage, only on the
-// other arguments not parsing.
+// The job has already failed when this runs, so this step adds no failure: once
+// its arguments parse it exits 0 whatever the platform answers, and says what
+// happened in one annotation on stderr (ci/cli.mjs annotate; stdout stays
+// empty). Released: a notice naming the state the app is back in. Refused as
+// not this app's deploy in flight (`deployment_not_abandonable`, e.g. a
+// finalize that completed first): a notice with the platform's sentence, since
+// there is nothing to release. Anything else, or no answer within the bound: a
+// warning that the recovery sweep releases the app later. (A platform from
+// before this route, v0.17.6, is no case: the platform deploys before the
+// mirror publishes, OPERATIONS 7.2.2's ordering rule, and every instance takes
+// v0.17.6 in order; r3 M19, v0.18.11.) A 409 app_busy (a finalize still running
+// under the app's lease, or another change to the app) is retried on
+// ci/broker-post.mjs's one schedule; each attempt waits at most
+// ABANDON_TIMEOUT_MS. A missing or empty token means the step before this one,
+// which mints it, failed: that is the job's failure already, so it is the same
+// warning and exit 0, with no request sent, rather than a second red step
+// (v0.17.6, build decision 16). Exit 1, with the usage, only on the other
+// arguments not parsing.
 
 import { brokerPost, refusalParts, withBusyRetry } from "./broker-post.mjs";
-import { annotate, isMainModule, logSafe, parseIntegerArg } from "./cli.mjs";
+import { UsageError, annotate, isMainModule, logSafe, parseIntegerArg } from "./cli.mjs";
 
 // How long each attempt waits for its answer: the platform's release is a
 // few writes under the app's lease, as quick as the token request it undoes
@@ -74,11 +75,9 @@ export async function requestAbandon({ base, app, deploymentId, token }, fetcher
 
 /**
  * Why the platform did not release the app, for the warning: the HTTP
- * status and the refusal's code, a 405 with no code read as a platform from
- * before this route (its asset router's answer), and otherwise what the
- * failure said after its label (`no answer within 30 s`), with the
- * network's own code when there was no connection at all (`fetch failed
- * (ECONNREFUSED)`).
+ * status and the refusal's code, and otherwise what the failure said after
+ * its label (`no answer within 30 s`), with the network's own code when
+ * there was no connection at all (`fetch failed (ECONNREFUSED)`).
  *
  * @param {any} err - what requestAbandon threw
  * @returns {string}
@@ -86,7 +85,6 @@ export async function requestAbandon({ base, app, deploymentId, token }, fetcher
 function notReleasedDetail(err) {
   if (typeof err?.status === "number") {
     const { error } = refusalParts(err.body);
-    if (err.status === 405 && error === null) return "HTTP 405 (this platform has no /deploy-abandon)";
     return `HTTP ${err.status}${error === null ? "" : ` ${error}`}`;
   }
   const said = String(err?.message ?? err).replace(/^deploy-abandon failed: /, "");
@@ -98,11 +96,11 @@ if (isMainModule(import.meta.url)) {
   let req;
   try {
     const [base, app, deploymentId, token = "", ...rest] = process.argv.slice(2);
-    if (!base || !app || !deploymentId || rest.length) throw new Error(USAGE);
+    if (!base || !app || !deploymentId || rest.length) throw new UsageError(USAGE);
     req = { base, app, deploymentId: parseIntegerArg("deploymentId", deploymentId), token };
   } catch (err) {
     console.error(logSafe(String(err?.message ?? err), 1000));
-    process.exitCode = 1;
+    process.exitCode = err instanceof UsageError ? 2 : 1;
   }
   if (req && !req.token) {
     annotate({
